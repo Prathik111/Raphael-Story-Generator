@@ -9,8 +9,11 @@ function PulseMark() {
 function splitTags(values: string[]) { return values.filter(Boolean).slice(0, 12); }
 
 function formatDate(value: string) {
-  try { return new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); }
-  catch { return value; }
+  const unix = value.match(/^unix:(\\d+)$/);
+  try {
+    const date = unix ? new Date(Number(unix[1]) * 1000) : new Date(value);
+    return date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  } catch { return value; }
 }
 
 function StoryCard({ story, selected, onClick }: { story: AppState['stories'][number]; selected: boolean; onClick: () => void }) {
@@ -77,7 +80,7 @@ function IntroductionView({ story }: { story: Story }) {
   </section>;
 }
 
-function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPrompt, buildingPrompt }: { story: Story; chapter: Chapter; onExtractScenes: () => void; extracting: boolean; onBuildPrompt: (scene: Scene) => void; buildingPrompt: string | null; }) {
+function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPrompt, onViewPrompt, buildingPrompt }: { story: Story; chapter: Chapter; onExtractScenes: () => void; extracting: boolean; onBuildPrompt: (scene: Scene) => void; onViewPrompt: (scene: Scene) => void; buildingPrompt: string | null; }) {
   return <div className="chapter-view">
     <div className="chapter-header hud-panel">
       <div><div className="eyebrow">CHAPTER {String(chapter.number).padStart(2, '0')}</div><h2>{chapter.title}</h2></div>
@@ -99,7 +102,7 @@ function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPromp
         <div className="scene-index">SCENE {String(scene.order).padStart(2, '0')}</div><h3>{scene.description}</h3>
         <div className="scene-meta"><span>{scene.location || 'UNKNOWN LOCATION'}</span><span>{scene.time || 'TIME UNSPECIFIED'}</span></div>
         <p className="scene-action">{scene.action}</p>
-        <div className="scene-footer"><span className={`scene-status ${scene.image_status}`}>{scene.image_status.replace('_', ' ').toUpperCase()}</span><button className="text-btn" onClick={() => onBuildPrompt(scene)} disabled={buildingPrompt === scene.id}>{buildingPrompt === scene.id ? 'BUILDING…' : scene.positive_prompt ? 'VIEW PROMPT' : 'BUILD IMAGE PROMPT'}</button></div>
+        <div className="scene-footer"><span className={`scene-status ${scene.image_status}`}>{scene.image_status.replace('_', ' ').toUpperCase()}</span><button className="text-btn" onClick={() => scene.positive_prompt ? onViewPrompt(scene) : onBuildPrompt(scene)} disabled={buildingPrompt === scene.id}>{buildingPrompt === scene.id ? 'BUILDING…' : scene.positive_prompt ? 'VIEW PROMPT' : 'BUILD IMAGE PROMPT'}</button></div>
       </article>)}</div>}
     </section>
   </div>;
@@ -127,7 +130,7 @@ export default function App() {
   const [state, setState] = useState<AppState | null>(null); const [story, setStory] = useState<Story | null>(null);
   const [prompt, setPrompt] = useState(''); const [directive, setDirective] = useState('');
   const [busy, setBusy] = useState(false); const [extracting, setExtracting] = useState(false); const [buildingPrompt, setBuildingPrompt] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null); const [settingsOpen, setSettingsOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null); const [settingsOpen, setSettingsOpen] = useState(false); const [promptPreview, setPromptPreview] = useState<Scene | null>(null);
 
   const loadState = async () => { const next = await api.getState(); setState(next); return next; };
   const selectStory = async (id: string) => { setError(null); try { setStory(await api.getStory(id)); } catch (e) { setError(String(e)); } };
@@ -138,6 +141,7 @@ export default function App() {
   const generateNext = async () => { if (!story || busy) return; setBusy(true); setError(null); try { const next = await api.generateNextChapter(story.id, directive.trim()); setStory(next); setDirective(''); await loadState(); } catch (e) { setError(String(e)); } finally { setBusy(false); } };
   const extractScenes = async (chapter: Chapter) => { if (!story || extracting) return; setExtracting(true); setError(null); try { await api.extractScenes(story.id, chapter.number); setStory(await api.getStory(story.id)); await loadState(); } catch (e) { setError(String(e)); } finally { setExtracting(false); } };
   const buildPrompt = async (scene: Scene) => { if (!story || buildingPrompt) return; const chapter = story.chapters.find(c => c.scenes.some(s => s.id === scene.id)); if (!chapter) return; setBuildingPrompt(scene.id); setError(null); try { setStory(await api.buildScenePrompt(story.id, chapter.number, scene.id)); await loadState(); } catch (e) { setError(String(e)); } finally { setBuildingPrompt(null); } };
+  const viewPrompt = (scene: Scene) => setPromptPreview(scene);
 
   const currentChapter = story?.chapters[story.chapters.length - 1] || null;
   const totalScenes = useMemo(() => story?.chapters.reduce((n, c) => n + c.scenes.length, 0) || 0, [story]);
@@ -165,7 +169,7 @@ export default function App() {
             <div className="story-header-tags"><TagRow values={story.metadata.tone} tone="tone"/></div>
           </section>
           <IntroductionView story={story}/>
-          {currentChapter ? <ChapterView story={story} chapter={currentChapter} onExtractScenes={() => void extractScenes(currentChapter)} extracting={extracting} onBuildPrompt={scene => void buildPrompt(scene)} buildingPrompt={buildingPrompt}/> : null}
+          {currentChapter ? <ChapterView story={story} chapter={currentChapter} onExtractScenes={() => void extractScenes(currentChapter)} extracting={extracting} onBuildPrompt={scene => void buildPrompt(scene)} onViewPrompt={viewPrompt} buildingPrompt={buildingPrompt}/> : null}
           <section className="hud-panel continuation-panel">
             <div className="section-head">CONTINUE THE STORY</div>
             <h2>Chapter {story.chapters.length + 1}</h2>
@@ -179,6 +183,7 @@ export default function App() {
       {story ? <MetadataPanel story={story}/> : <aside className="inspector placeholder-inspector"><section className="hud-panel inspector-panel"><div className="section-head">PIPELINE</div><div className="pipeline-step active"><b>01</b><span>STORY BIBLE</span></div><div className="pipeline-step"><b>02</b><span>CHAPTERS</span></div><div className="pipeline-step"><b>03</b><span>SCENE EXTRACTION</span></div><div className="pipeline-step"><b>04</b><span>IMAGE BUILDER</span></div><div className="pipeline-note">The story engine is designed so scene extraction and ComfyUI image generation can run without changing the story canon.</div></section></aside>}
     </div>
 
+    {promptPreview ? <div className="overlay" onMouseDown={() => setPromptPreview(null)}><section className="prompt-viewer hud-panel" onMouseDown={e => e.stopPropagation()}><header className="settings-header"><div><div className="eyebrow">IMAGE BUILDER</div><h2>SCENE {String(promptPreview.order).padStart(2, '0')} PROMPTS</h2></div><button className="settings-close" onClick={() => setPromptPreview(null)}>×</button></header><div className="prompt-viewer-body"><div><div className="section-head">POSITIVE PROMPT</div><pre className="prompt-box">{promptPreview.positive_prompt}</pre></div><div><div className="section-head">NEGATIVE PROMPT</div><pre className="prompt-box">{promptPreview.negative_prompt}</pre></div></div></section></div> : null}
     {settingsOpen ? <SettingsOverlay settings={state.settings} onSave={async value => { const next = await api.saveSettings(value); setState({ ...state, settings: next, llm_configured: Boolean(next.llm_base_url && next.llm_model) }); }} onClose={() => setSettingsOpen(false)}/> : null}
   </div>;
 }
