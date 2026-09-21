@@ -117,6 +117,7 @@ function SettingsOverlay({ settings, onSave, onClose, onError }: { settings: App
       onClose();
     } catch (error) {
       onError(String(error));
+      onClose();
     } finally {
       setBusy(false);
     }
