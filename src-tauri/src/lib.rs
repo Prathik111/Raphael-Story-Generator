@@ -236,14 +236,32 @@ impl Store {
         let data_dir = app.path().app_data_dir().map_err(|e| AppError::Storage(e.to_string()))?;
         let root = data_dir.join("story-generator");
         fs::create_dir_all(root.join("stories")).map_err(|e| AppError::Storage(e.to_string()))?;
-        let settings = load_json::<AppSettings>(&root.join("settings.json")).unwrap_or_default();
+        let settings_path = root.join("settings.json");
+        let settings = if settings_path.exists() {
+            load_json::<AppSettings>(&settings_path).map_err(|e| {
+                AppError::Storage(format!("failed to load settings.json: {e}"))
+            })?
+        } else {
+            AppSettings::default()
+        };
+
         let mut data = StoreData::default();
-        if let Ok(entries) = fs::read_dir(root.join("stories")) {
-            for entry in entries.flatten() {
-                if entry.path().extension().and_then(|x| x.to_str()) != Some("json") { continue; }
-                if let Ok(story) = load_json::<Story>(&entry.path()) { data.stories.insert(story.id.clone(), story); }
+        let entries = fs::read_dir(root.join("stories"))
+            .map_err(|e| AppError::Storage(format!("failed to read stories directory: {e}")))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| AppError::Storage(format!("failed to read story entry: {e}")))?;
+            let path = entry.path();
+            if path.extension().and_then(|x| x.to_str()) != Some("json") {
+                continue;
             }
+
+            let story = load_json::<Story>(&path).map_err(|e| {
+                AppError::Storage(format!("failed to load story file {}: {e}", path.display()))
+            })?;
+            data.stories.insert(story.id.clone(), story);
         }
+
         Ok(Self { root, data: RwLock::new(data), settings: RwLock::new(settings) })
     }
     fn persist_settings(&self) -> AppResult<()> {
