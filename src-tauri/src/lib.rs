@@ -45,6 +45,7 @@ impl Default for AppSettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct StoryMetadata {
     pub genre: Vec<String>,
     pub tags: Vec<String>,
@@ -142,6 +143,7 @@ pub struct AppStateDto {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(default)]
 struct InitialResponse {
     title: String,
     metadata: StoryMetadata,
@@ -158,6 +160,7 @@ struct InitialResponse {
     chapter: ChapterDraft,
 }
 #[derive(Debug, Deserialize)]
+#[serde(default)]
 struct CharacterDraft {
     name: String,
     role: String,
@@ -174,12 +177,14 @@ struct RelationshipDraft {
     description: String,
 }
 #[derive(Debug, Deserialize)]
+#[serde(default)]
 struct ChapterDraft {
     title: String,
     summary: String,
     text: String,
     events: Vec<String>,
     continuity_updates: Vec<String>,
+    new_characters: Vec<CharacterDraft>,
     character_state_updates: Vec<CharacterStateUpdate>,
     relationship_updates: Vec<RelationshipUpdate>,
     open_threads: Vec<String>,
@@ -192,8 +197,8 @@ struct CharacterStateUpdate {
 }
 #[derive(Debug, Deserialize)]
 struct RelationshipUpdate {
-    source_character_id: String,
-    target_character_id: String,
+    source_character: String,
+    target_character: String,
     relation_type: String,
     description: String,
 }
@@ -383,7 +388,7 @@ Return ONLY valid JSON. Do not include markdown.
 "#;
     let bible = serde_json::to_string(&story.bible).map_err(|e| AppError::ModelResponse(e.to_string()))?;
     let directive = if user_prompt.trim().is_empty() { "(none — continue naturally)" } else { user_prompt.trim() };
-    let schema = r#"{"title":"","summary":"","text":"","events":[],"continuity_updates":[],"character_state_updates":[{"character_id":"","current_state":"","clothing":""}],"relationship_updates":[{"source_character_id":"","target_character_id":"","relation_type":"","description":""}],"open_threads":[]}"#;
+    let schema = r#"{"title":"","summary":"","text":"","events":[],"continuity_updates":[],"new_characters":[{"name":"","role":"","personality":[],"appearance":"","clothing":"","motivations":[]}],"character_state_updates":[{"character_id":"","current_state":"","clothing":""}],"relationship_updates":[{"source_character":"","target_character":"","relation_type":"","description":""}],"open_threads":[]}"#;
     let user = format!("CHAPTER NUMBER: {}
 
 STORY BIBLE:
@@ -405,12 +410,38 @@ Return this JSON shape:
             if let Some(clothing) = update.clothing.clone() { if !clothing.is_empty() { character.clothing = clothing; } }
         }
     }
+    let mut name_to_id: HashMap<String, String> = story.bible.characters.iter()
+        .map(|c| (c.name.trim().to_lowercase(), c.id.clone()))
+        .collect();
+    for draft in parsed.new_characters.iter() {
+        let key = draft.name.trim().to_lowercase();
+        if key.is_empty() || name_to_id.contains_key(&key) { continue; }
+        let id = format!("char-{:03}", story.bible.characters.len() + 1);
+        name_to_id.insert(key, id.clone());
+        story.bible.characters.push(Character {
+            id,
+            name: draft.name.trim().to_string(),
+            role: draft.role.clone(),
+            personality: draft.personality.clone(),
+            appearance: draft.appearance.clone(),
+            clothing: draft.clothing.clone(),
+            motivations: draft.motivations.clone(),
+            current_state: format!("Introduced in Chapter {}", next_number),
+        });
+    }
     for update in parsed.relationship_updates.iter() {
-        if let Some(existing) = story.bible.relationships.iter_mut().find(|r| r.source_character_id == update.source_character_id && r.target_character_id == update.target_character_id) {
+        let Some(source_id) = name_to_id.get(&update.source_character.trim().to_lowercase()).cloned() else { continue };
+        let Some(target_id) = name_to_id.get(&update.target_character.trim().to_lowercase()).cloned() else { continue };
+        if let Some(existing) = story.bible.relationships.iter_mut().find(|r| r.source_character_id == source_id && r.target_character_id == target_id) {
             existing.relation_type = update.relation_type.clone();
             existing.description = update.description.clone();
         } else {
-            story.bible.relationships.push(Relationship { source_character_id: update.source_character_id.clone(), target_character_id: update.target_character_id.clone(), relation_type: update.relation_type.clone(), description: update.description.clone() });
+            story.bible.relationships.push(Relationship {
+                source_character_id: source_id,
+                target_character_id: target_id,
+                relation_type: update.relation_type.clone(),
+                description: update.description.clone(),
+            });
         }
     }
     if !parsed.open_threads.is_empty() { story.bible.open_threads = parsed.open_threads.clone(); }
@@ -499,7 +530,13 @@ Return:
 }
 pub fn run() {
     tauri::Builder::default()
-        .setup(|app| { let store = Store::new(app.handle()).map_err(|e| e.to_string())?; app.manage(store); Ok(()) })
+        .setup(|app| {
+            let store = Store::new(app.handle()).map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+            })?;
+            app.manage(store);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![get_app_state, get_story, get_settings, save_settings, create_story, generate_next_chapter, extract_scenes, build_scene_prompt])
         .run(tauri::generate_context!())
         .expect("error while running Raphael Story Generator");
