@@ -567,8 +567,11 @@ JSON shape:
 
     let chapter = Chapter {
         number: 1, title: parsed.chapter.title, summary: parsed.chapter.summary, text: parsed.chapter.text,
-        user_directive: None, events: parsed.chapter.events, continuity_updates: parsed.chapter.continuity_updates,
-        scenes: Vec::new(), created_at: now(),
+        user_directive: None,
+        events: parsed.chapter.events,
+        continuity_updates: parsed.chapter.continuity_updates.clone(),
+        scenes: Vec::new(),
+        created_at: now(),
     };
     let created = now();
     let story = Story {
