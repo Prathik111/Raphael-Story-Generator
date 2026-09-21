@@ -92,7 +92,7 @@ pub struct StoryBible {
     pub open_threads: Vec<String>,
     pub continuity_notes: Vec<String>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Scene {
     pub id: String,
@@ -149,7 +149,7 @@ pub struct AppStateDto {
     pub llm_configured: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 #[serde(default)]
 struct InitialResponse {
     title: String,
@@ -166,7 +166,7 @@ struct InitialResponse {
     introduction: String,
     chapter: ChapterDraft,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 #[serde(default)]
 struct CharacterDraft {
     name: String,
@@ -183,7 +183,7 @@ struct RelationshipDraft {
     relation_type: String,
     description: String,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 #[serde(default)]
 struct ChapterDraft {
     title: String,
