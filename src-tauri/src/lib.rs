@@ -642,9 +642,12 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
         "client_id": format!("raphael-story-{}", story.id),
     })).send().await.map_err(|e| AppError::ComfyUi(e.to_string()))?;
     let status = response.status();
-    let value: Value = response.json().await.map_err(|e| AppError::ComfyUi(e.to_string()))?;
+    let body = response.text().await.map_err(|e| AppError::ComfyUi(e.to_string()))?;
+    let value: Value = serde_json::from_str(&body).unwrap_or_else(|_| json!({ "error": body }));
     if !status.is_success() {
-        return Err(AppError::ComfyUi(value.get("error").and_then(Value::as_str).unwrap_or("ComfyUI rejected the workflow").to_string()));
+        return Err(AppError::ComfyUi(
+            value.get("error").and_then(Value::as_str).unwrap_or("ComfyUI rejected the workflow").to_string()
+        ));
     }
     let prompt_id = value.get("prompt_id").and_then(Value::as_str).ok_or_else(|| AppError::ComfyUi("ComfyUI did not return a prompt_id".into()))?.to_string();
     let chapter_mut = story.chapters.iter_mut().find(|c| c.number == chapter_number).unwrap();
