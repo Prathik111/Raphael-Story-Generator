@@ -311,11 +311,11 @@ fn http_client() -> AppResult<reqwest::Client> {
 
 async fn chat(settings: &AppSettings, system: &str, user: &str) -> AppResult<String> {
     validate_settings(settings)?;
-    let base = settings.llm_base_url.trim_end_matches('/');
+    let base = settings.llm_base_url.trim().trim_end_matches('/');
     let url = if base.ends_with("/chat/completions") { base.to_string() } else { format!("{base}/chat/completions") };
     let client = http_client()?;
     let body = json!({
-        "model": settings.llm_model,
+        "model": settings.llm_model.trim(),
         "temperature": settings.temperature,
         "messages": [
             {"role":"system","content":system},
