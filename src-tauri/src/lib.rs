@@ -267,10 +267,26 @@ fn now() -> String {
     let seconds = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     format!("unix:{}", seconds)
 }
+
+fn normalize_name(value: &str) -> String {
+    value.trim().to_lowercase()
+}
+
+fn http_client() -> AppResult<reqwest::Client> {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| AppError::Llm(format!("failed to create HTTP client: {e}")))
+}
+
 async fn chat(settings: &AppSettings, system: &str, user: &str) -> AppResult<String> {
     let base = settings.llm_base_url.trim_end_matches('/');
+    if !(base.starts_with("http://") || base.starts_with("https://")) {
+        return Err(AppError::Llm("LLM base URL must start with http:// or https://".into()));
+    }
     let url = if base.ends_with("/chat/completions") { base.to_string() } else { format!("{base}/chat/completions") };
-    let client = reqwest::Client::new();
+    let client = http_client()?;
     let body = json!({
         "model": settings.llm_model,
         "temperature": settings.temperature,
@@ -295,6 +311,19 @@ fn clean_json(raw: &str) -> &str {
     }
     trimmed
 }
+fn validate_initial_response(parsed: &InitialResponse) -> AppResult<()> {
+    if parsed.title.trim().is_empty() {
+        return Err(AppError::ModelResponse("generated story title is empty".into()));
+    }
+    if parsed.introduction.trim().is_empty() {
+        return Err(AppError::ModelResponse("generated story introduction is empty".into()));
+    }
+    if parsed.chapter.title.trim().is_empty() || parsed.chapter.text.trim().is_empty() {
+        return Err(AppError::ModelResponse("generated Chapter 1 is incomplete".into()));
+    }
+    Ok(())
+}
+
 fn replace_workflow_placeholders(value: &mut Value, replacements: &[(&str, String)]) {
     match value {
         Value::String(text) => {
@@ -367,17 +396,18 @@ JSON shape:
 
 {}", prompt.trim(), schema_hint)).await?;
     let parsed: InitialResponse = serde_json::from_str(clean_json(&raw)).map_err(|e| AppError::ModelResponse(format!("{}; raw model output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
+    validate_initial_response(&parsed)?;
     let story_id = Uuid::new_v4().to_string();
     let mut characters = Vec::with_capacity(parsed.characters.len());
     let mut name_to_id = HashMap::new();
     for (index, draft) in parsed.characters.into_iter().enumerate() {
         let id = format!("char-{:03}", index + 1);
-        name_to_id.insert(draft.name.to_lowercase(), id.clone());
+        name_to_id.insert(normalize_name(&draft.name), id.clone());
         characters.push(Character { id, name: draft.name, role: draft.role, personality: draft.personality, appearance: draft.appearance, clothing: draft.clothing, motivations: draft.motivations, current_state: "Introduced in Chapter 1".into() });
     }
     let relationships = parsed.relationships.into_iter().filter_map(|r| Some(Relationship {
-        source_character_id: name_to_id.get(&r.source.to_lowercase())?.clone(),
-        target_character_id: name_to_id.get(&r.target.to_lowercase())?.clone(),
+        source_character_id: name_to_id.get(&normalize_name(&r.source))?.clone(),
+        target_character_id: name_to_id.get(&normalize_name(&r.target))?.clone(),
         relation_type: r.relation_type,
         description: r.description,
     })).collect::<Vec<_>>();
@@ -429,16 +459,18 @@ Return this JSON shape:
     let raw = chat(&settings, system, &user).await?;
     let parsed: ChapterDraft = serde_json::from_str(clean_json(&raw)).map_err(|e| AppError::ModelResponse(format!("{}; raw model output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
     for update in parsed.character_state_updates.iter() {
-        if let Some(character) = story.bible.characters.iter_mut().find(|c| c.id == update.character_id) {
+        if let Some(character) = story.bible.characters.iter_mut().find(|c| {
+            c.id == update.character_id || normalize_name(&c.name) == normalize_name(&update.character_id)
+        }) {
             character.current_state = update.current_state.clone();
             if let Some(clothing) = update.clothing.clone() { if !clothing.is_empty() { character.clothing = clothing; } }
         }
     }
     let mut name_to_id: HashMap<String, String> = story.bible.characters.iter()
-        .map(|c| (c.name.trim().to_lowercase(), c.id.clone()))
+        .map(|c| (normalize_name(&c.name), c.id.clone()))
         .collect();
     for draft in parsed.new_characters.iter() {
-        let key = draft.name.trim().to_lowercase();
+        let key = normalize_name(&draft.name);
         if key.is_empty() || name_to_id.contains_key(&key) { continue; }
         let id = format!("char-{:03}", story.bible.characters.len() + 1);
         name_to_id.insert(key, id.clone());
@@ -454,8 +486,8 @@ Return this JSON shape:
         });
     }
     for update in parsed.relationship_updates.iter() {
-        let Some(source_id) = name_to_id.get(&update.source_character.trim().to_lowercase()).cloned() else { continue };
-        let Some(target_id) = name_to_id.get(&update.target_character.trim().to_lowercase()).cloned() else { continue };
+        let Some(source_id) = name_to_id.get(&normalize_name(&update.source_character)).cloned() else { continue };
+        let Some(target_id) = name_to_id.get(&normalize_name(&update.target_character)).cloned() else { continue };
         if let Some(existing) = story.bible.relationships.iter_mut().find(|r| r.source_character_id == source_id && r.target_character_id == target_id) {
             existing.relation_type = update.relation_type.clone();
             existing.description = update.description.clone();
@@ -523,7 +555,9 @@ async fn build_scene_prompt(story_id: String, chapter_number: usize, scene_id: S
     let settings = store.settings.read().map_err(|e| AppError::Storage(e.to_string()))?.clone();
     let chapter = story.chapters.iter().find(|c| c.number == chapter_number).ok_or_else(|| AppError::ModelResponse("chapter not found".into()))?;
     let scene = chapter.scenes.iter().find(|s| s.id == scene_id).ok_or_else(|| AppError::ModelResponse("scene not found".into()))?;
-    let characters = story.bible.characters.iter().filter(|c| scene.characters.iter().any(|name| name == &c.id || name.eq_ignore_ascii_case(&c.name))).map(|c| format!("{} — appearance: {}; clothing: {}; personality: {:?}", c.name, c.appearance, c.clothing, c.personality)).collect::<Vec<_>>().join("
+    let characters = story.bible.characters.iter().filter(|c| {
+        scene.characters.iter().any(|name| name.trim() == c.id || normalize_name(name) == normalize_name(&c.name))
+    }).map(|c| format!("{} — appearance: {}; clothing: {}; personality: {:?}", c.name, c.appearance, c.clothing, c.personality)).collect::<Vec<_>>().join("
 ");
     let system = r#"
 You are Raphael Image Builder prompt director. Convert one scene into a positive and negative image-generation prompt suitable for an anime/manga diffusion workflow.
@@ -569,15 +603,25 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
     }
     let mut workflow: Value = serde_json::from_str(&settings.comfyui_workflow_json)
         .map_err(|e| AppError::ComfyUi(format!("workflow JSON is invalid: {e}")))?;
+    let seed = (Uuid::new_v4().as_u128() & u64::MAX as u128) as u64;
     replace_workflow_placeholders(&mut workflow, &[
-        ("{{POSITIVE_PROMPT}}", scene.positive_prompt.clone()),
-        ("{{NEGATIVE_PROMPT}}", scene.negative_prompt.clone()),
-        ("{{SEED}}", uuid::Uuid::new_v4().as_u128().to_string()),
-        ("{{STORY_ID}}", story.id.clone()),
-        ("{{SCENE_ID}}", scene.id.clone()),
+        ("{{POSITIVE_PROMPT}}", Value::String(scene.positive_prompt.clone())),
+        ("{{NEGATIVE_PROMPT}}", Value::String(scene.negative_prompt.clone())),
+        ("{{SEED}}", Value::String(seed.to_string())),
+        ("{{STORY_ID}}", Value::String(story.id.clone())),
+        ("{{SCENE_ID}}", Value::String(scene.id.clone())),
     ]);
-    let url = format!("{}/prompt", settings.comfyui_url.trim_end_matches('/'));
-    let response = reqwest::Client::new().post(url).json(&json!({
+    let comfyui_url = settings.comfyui_url.trim();
+    if !(comfyui_url.starts_with("http://") || comfyui_url.starts_with("https://")) {
+        return Err(AppError::ComfyUi("ComfyUI URL must start with http:// or https://".into()));
+    }
+    let url = format!("{}/prompt", comfyui_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| AppError::ComfyUi(format!("failed to create HTTP client: {e}")))?;
+    let response = client.post(url).json(&json!({
         "prompt": workflow,
         "client_id": format!("raphael-story-{}", story.id),
     })).send().await.map_err(|e| AppError::ComfyUi(e.to_string()))?;
