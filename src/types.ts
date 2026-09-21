@@ -1,0 +1,114 @@
+export interface StorySummary {
+  id: string;
+  title: string;
+  chapter_count: number;
+  scene_count: number;
+  updated_at: string;
+}
+
+export interface StoryMetadata {
+  genre: string[];
+  tags: string[];
+  demographic: string;
+  content_rating: string;
+  tone: string[];
+  source_type: string;
+  source_title: string;
+  inspirations: string[];
+}
+
+export interface Character {
+  id: string;
+  name: string;
+  role: string;
+  personality: string[];
+  appearance: string;
+  clothing: string;
+  motivations: string[];
+  current_state: string;
+}
+
+export interface Relationship {
+  source_character_id: string;
+  target_character_id: string;
+  relation_type: string;
+  description: string;
+}
+
+export interface StoryBible {
+  premise: string;
+  central_conflict: string;
+  themes: string[];
+  world_setting: string;
+  world_rules: string[];
+  locations: string[];
+  characters: Character[];
+  relationships: Relationship[];
+  open_threads: string[];
+  continuity_notes: string[];
+}
+
+export interface Scene {
+  id: string;
+  order: number;
+  description: string;
+  location: string;
+  time: string;
+  characters: string[];
+  action: string;
+  composition: string;
+  dialogue: string;
+  positive_prompt: string;
+  negative_prompt: string;
+  image_status: 'not_ready' | 'prompt_ready' | 'queued' | 'generated' | 'failed';
+  image_url: string | null;
+  comfy_prompt_id: string | null;
+}
+
+export interface Chapter {
+  number: number;
+  title: string;
+  summary: string;
+  text: string;
+  user_directive: string | null;
+  events: string[];
+  continuity_updates: string[];
+  scenes: Scene[];
+  created_at: string;
+}
+
+export interface Story {
+  id: string;
+  title: string;
+  source_prompt: string;
+  metadata: StoryMetadata;
+  introduction: string;
+  bible: StoryBible;
+  chapters: Chapter[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AppSettings {
+  llm_base_url: string;
+  llm_model: string;
+  llm_api_key: string;
+  temperature: number;
+  comfyui_url: string;
+  comfyui_workflow_json: string;
+}
+
+export interface AppState {
+  stories: StorySummary[];
+  settings: AppSettings;
+  llm_configured: boolean;
+}
+
+export interface SceneExtractionResult {
+  chapter_number: number;
+  scenes: Scene[];
+}
+
+export interface CommandResult {
+  message: string;
+}

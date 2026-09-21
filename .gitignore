@@ -4,3 +4,7 @@ dist/
 .DS_Store
 *.log
 src-tauri/target/
+src-tauri/icons/icon.ico
+.env
+.env.*
+!.env.example
