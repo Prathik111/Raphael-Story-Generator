@@ -68,4 +68,11 @@ The image builder can queue a scene through ComfyUI's `/prompt` API. In Settings
 
 The workflow itself owns the checkpoint, LoRA, sampler, resolution and other generation nodes. This keeps the story engine independent from a particular model library while still allowing a production workflow to be queued directly.
 
+Use `"{{SEED}}"` as the complete value of a numeric seed field. Raphael converts that exact placeholder into a JSON number; embedded text such as `"seed={{SEED}}"` remains a string.
+
 Automatic model/LoRA discovery from Raphael Model Manager is intentionally left behind an adapter boundary for the next integration stage.
+
+
+## Local settings and secrets
+
+The optional LLM API key is stored in the application's local settings file and is not committed to the repository. Do not use a shared Windows account for credentials you need to keep private.
