@@ -281,10 +281,8 @@ fn http_client() -> AppResult<reqwest::Client> {
 }
 
 async fn chat(settings: &AppSettings, system: &str, user: &str) -> AppResult<String> {
+    validate_settings(settings)?;
     let base = settings.llm_base_url.trim_end_matches('/');
-    if !(base.starts_with("http://") || base.starts_with("https://")) {
-        return Err(AppError::Llm("LLM base URL must start with http:// or https://".into()));
-    }
     let url = if base.ends_with("/chat/completions") { base.to_string() } else { format!("{base}/chat/completions") };
     let client = http_client()?;
     let body = json!({
@@ -321,6 +319,45 @@ fn validate_initial_response(parsed: &InitialResponse) -> AppResult<()> {
     if parsed.chapter.title.trim().is_empty() || parsed.chapter.text.trim().is_empty() {
         return Err(AppError::ModelResponse("generated Chapter 1 is incomplete".into()));
     }
+    Ok(())
+}
+
+fn validate_chapter_draft(parsed: &ChapterDraft, chapter_number: usize) -> AppResult<()> {
+    if parsed.title.trim().is_empty() || parsed.text.trim().is_empty() {
+        return Err(AppError::ModelResponse(format!(
+            "generated Chapter {} is incomplete",
+            chapter_number
+        )));
+    }
+    Ok(())
+}
+
+fn validate_settings(settings: &AppSettings) -> AppResult<()> {
+    if settings.llm_model.trim().is_empty() {
+        return Err(AppError::Llm("LLM model cannot be empty".into()));
+    }
+    if !settings.temperature.is_finite() || !(0.0..=2.0).contains(&settings.temperature) {
+        return Err(AppError::Llm("temperature must be between 0 and 2".into()));
+    }
+
+    let llm_url = settings.llm_base_url.trim();
+    if !(llm_url.starts_with("http://") || llm_url.starts_with("https://")) {
+        return Err(AppError::Llm("LLM base URL must start with http:// or https://".into()));
+    }
+
+    let comfyui_url = settings.comfyui_url.trim();
+    if !comfyui_url.is_empty() && !(comfyui_url.starts_with("http://") || comfyui_url.starts_with("https://")) {
+        return Err(AppError::ComfyUi("ComfyUI URL must start with http:// or https://".into()));
+    }
+
+    if !settings.comfyui_workflow_json.trim().is_empty() {
+        let workflow: Value = serde_json::from_str(&settings.comfyui_workflow_json)
+            .map_err(|e| AppError::ComfyUi(format!("workflow JSON is invalid: {e}")))?;
+        if !workflow.is_object() {
+            return Err(AppError::ComfyUi("ComfyUI workflow must be a JSON object".into()));
+        }
+    }
+
     Ok(())
 }
 
@@ -388,6 +425,7 @@ fn get_settings(store: State<'_, Store>) -> AppResult<AppSettings> {
 }
 #[tauri::command]
 fn save_settings(settings: AppSettings, store: State<'_, Store>) -> AppResult<AppSettings> {
+    validate_settings(&settings)?;
     *store.settings.write().map_err(|e| AppError::Storage(e.to_string()))? = settings.clone();
     store.persist_settings()?;
     Ok(settings)
@@ -474,6 +512,7 @@ Return this JSON shape:
 {}", next_number, bible, previous, directive, schema);
     let raw = chat(&settings, system, &user).await?;
     let parsed: ChapterDraft = serde_json::from_str(clean_json(&raw)).map_err(|e| AppError::ModelResponse(format!("{}; raw model output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
+    validate_chapter_draft(&parsed, next_number)?;
     for update in parsed.character_state_updates.iter() {
         if let Some(character) = story.bible.characters.iter_mut().find(|c| {
             c.id == update.character_id || normalize_name(&c.name) == normalize_name(&update.character_id)
