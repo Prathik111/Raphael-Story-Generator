@@ -37,16 +37,19 @@ The engine uses an OpenAI-compatible `/chat/completions` endpoint so it can poin
 
 ## Development
 
+Install dependencies:
+
 ```bash
 npm install
-npm run dev
 ```
 
-For the desktop app:
+Run the desktop application:
 
 ```bash
 npm run tauri:dev
 ```
+
+`npm run dev` starts the Vite frontend server used internally by Tauri during development; the application requires the Tauri desktop runtime.
 
 ## Notes
 
