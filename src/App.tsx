@@ -108,9 +108,19 @@ function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPromp
   </div>;
 }
 
-function SettingsOverlay({ settings, onSave, onClose }: { settings: AppSettings; onSave: (settings: AppSettings) => Promise<void>; onClose: () => void }) {
+function SettingsOverlay({ settings, onSave, onClose, onError }: { settings: AppSettings; onSave: (settings: AppSettings) => Promise<void>; onClose: () => void; onError: (message: string) => void }) {
   const [draft, setDraft] = useState(settings); const [busy, setBusy] = useState(false);
-  const save = async () => { setBusy(true); try { await onSave(draft); onClose(); } finally { setBusy(false); } };
+  const save = async () => {
+    setBusy(true);
+    try {
+      await onSave(draft);
+      onClose();
+    } catch (error) {
+      onError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
   return <div className="overlay" onMouseDown={onClose}><section className="settings-panel hud-panel" onMouseDown={e => e.stopPropagation()}>
     <header className="settings-header"><div><div className="eyebrow">RAPHAEL CORE</div><h2>ENGINE SETTINGS</h2></div><button className="settings-close" onClick={onClose}>×</button></header>
     <div className="settings-scroll">
@@ -133,14 +143,34 @@ export default function App() {
   const [busy, setBusy] = useState(false); const [extracting, setExtracting] = useState(false); const [buildingPrompt, setBuildingPrompt] = useState<string | null>(null); const [queueing, setQueueing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null); const [settingsOpen, setSettingsOpen] = useState(false); const [promptPreview, setPromptPreview] = useState<Scene | null>(null);
 
-  const loadState = async () => { const next = await api.getState(); setState(next); return next; };
+  const loadState = async () => {
+    const next = await api.getState();
+    setState(next);
+    return next;
+  };
   const selectStory = async (id: string) => { setError(null); try { setStory(await api.getStory(id)); } catch (e) { setError(String(e)); } };
   useEffect(() => { void loadState().catch(e => setError(String(e))); }, []);
   useEffect(() => { if (!story && state?.stories[0]) void selectStory(state.stories[0].id); }, [state?.stories]);
 
   const generateStory = async () => { if (!prompt.trim() || busy) return; setBusy(true); setError(null); try { const next = await api.createStory(prompt.trim()); setStory(next); setPrompt(''); await loadState(); } catch (e) { setError(String(e)); } finally { setBusy(false); } };
   const generateNext = async () => { if (!story || busy) return; setBusy(true); setError(null); try { const next = await api.generateNextChapter(story.id, directive.trim()); setStory(next); setDirective(''); await loadState(); } catch (e) { setError(String(e)); } finally { setBusy(false); } };
-  const extractScenes = async (chapter: Chapter) => { if (!story || extracting) return; setExtracting(true); setError(null); try { await api.extractScenes(story.id, chapter.number); setStory(await api.getStory(story.id)); await loadState(); } catch (e) { setError(String(e)); } finally { setExtracting(false); } };
+  const extractScenes = async (chapter: Chapter) => {
+    if (!story || extracting) return;
+    if (chapter.scenes.length > 0 && !window.confirm('Rebuild scenes? Existing scene prompts, queue IDs, and image state for this chapter will be replaced.')) {
+      return;
+    }
+    setExtracting(true);
+    setError(null);
+    try {
+      await api.extractScenes(story.id, chapter.number);
+      setStory(await api.getStory(story.id));
+      await loadState();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setExtracting(false);
+    }
+  };
   const buildPrompt = async (scene: Scene) => { if (!story || buildingPrompt) return; const chapter = story.chapters.find(c => c.scenes.some(s => s.id === scene.id)); if (!chapter) return; setBuildingPrompt(scene.id); setError(null); try { setStory(await api.buildScenePrompt(story.id, chapter.number, scene.id)); await loadState(); } catch (e) { setError(String(e)); } finally { setBuildingPrompt(null); } };
   const viewPrompt = (scene: Scene) => setPromptPreview(scene);
   const queueImage = async (scene: Scene) => { if (!story || queueing) return; const chapter = story.chapters.find(c => c.scenes.some(s => s.id === scene.id)); if (!chapter) return; setQueueing(scene.id); setError(null); try { setStory(await api.queueSceneImage(story.id, chapter.number, scene.id)); await loadState(); } catch (e) { setError(String(e)); } finally { setQueueing(null); } };
@@ -148,7 +178,29 @@ export default function App() {
   const currentChapter = story?.chapters[story.chapters.length - 1] || null;
   const totalScenes = useMemo(() => story?.chapters.reduce((n, c) => n + c.scenes.length, 0) || 0, [story]);
 
-  if (!state) return <div className="setup-shell"><PulseMark/><div className="loading-card hud-panel"><div className="eyebrow">RAPHAEL STORY GENERATOR</div><h1>INITIALIZING STORY ENGINE…</h1><span className="pulse-line"/></div></div>;
+  if (!state) return (
+    <div className="setup-shell">
+      <PulseMark/>
+      <div className="loading-card hud-panel">
+        <div className="eyebrow">RAPHAEL STORY GENERATOR</div>
+        {error ? (
+          <>
+            <h1>STORY ENGINE FAILED TO INITIALIZE</h1>
+            <div className="error-box">{error}</div>
+            <button className="primary-btn" onClick={() => {
+              setError(null);
+              void loadState().catch(e => setError(String(e)));
+            }}>RETRY</button>
+          </>
+        ) : (
+          <>
+            <h1>INITIALIZING STORY ENGINE…</h1>
+            <span className="pulse-line"/>
+          </>
+        )}
+      </div>
+    </div>
+  );
 
   return <div className="app-shell">
     <header className="topbar">
@@ -186,6 +238,14 @@ export default function App() {
     </div>
 
     {promptPreview ? <div className="overlay" onMouseDown={() => setPromptPreview(null)}><section className="prompt-viewer hud-panel" onMouseDown={e => e.stopPropagation()}><header className="settings-header"><div><div className="eyebrow">IMAGE BUILDER</div><h2>SCENE {String(promptPreview.order).padStart(2, '0')} PROMPTS</h2></div><button className="settings-close" onClick={() => setPromptPreview(null)}>×</button></header><div className="prompt-viewer-body"><div><div className="section-head">POSITIVE PROMPT</div><pre className="prompt-box">{promptPreview.positive_prompt}</pre></div><div><div className="section-head">NEGATIVE PROMPT</div><pre className="prompt-box">{promptPreview.negative_prompt}</pre></div></div></section></div> : null}
-    {settingsOpen ? <SettingsOverlay settings={state.settings} onSave={async value => { const next = await api.saveSettings(value); setState({ ...state, settings: next, llm_configured: Boolean(next.llm_base_url && next.llm_model) }); }} onClose={() => setSettingsOpen(false)}/> : null}
+    {settingsOpen ? <SettingsOverlay
+      settings={state.settings}
+      onSave={async value => {
+        const next = await api.saveSettings(value);
+        setState(prev => prev ? { ...prev, settings: next, llm_configured: Boolean(next.llm_base_url && next.llm_model) } : prev);
+      }}
+      onError={message => setError(message)}
+      onClose={() => setSettingsOpen(false)}
+    /> : null}
   </div>;
 }
