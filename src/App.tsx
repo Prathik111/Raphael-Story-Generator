@@ -16,8 +16,8 @@ function formatDate(value: string) {
   } catch { return value; }
 }
 
-function StoryCard({ story, selected, onClick }: { story: AppState['stories'][number]; selected: boolean; onClick: () => void }) {
-  return <button className={`story-card ${selected ? 'active' : ''}`} onClick={onClick}>
+function StoryCard({ story, selected, onClick, disabled }: { story: AppState['stories'][number]; selected: boolean; onClick: () => void; disabled: boolean }) {
+  return <button className={`story-card ${selected ? 'active' : ''}`} onClick={onClick} disabled={disabled}>
     <div className="story-card-top"><span className="story-index">STORY</span><span className="story-status">{story.chapter_count ? `${story.chapter_count} CH` : 'NEW'}</span></div>
     <strong>{story.title}</strong>
     <span className="story-card-meta">{story.scene_count} SCENES · {formatDate(story.updated_at)}</span>
@@ -149,7 +149,16 @@ export default function App() {
     setState(next);
     return next;
   };
-  const selectStory = async (id: string) => { setError(null); try { setStory(await api.getStory(id)); } catch (e) { setError(String(e)); } };
+  const selectStory = async (id: string) => {
+    setError(null);
+    try {
+      setDirective('');
+      setPromptPreview(null);
+      setStory(await api.getStory(id));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
   useEffect(() => { void loadState().catch(e => setError(String(e))); }, []);
   useEffect(() => { if (!story && state?.stories[0]) void selectStory(state.stories[0].id); }, [state?.stories]);
 
@@ -211,8 +220,8 @@ export default function App() {
 
     <div className="workspace">
       <aside className="sidebar">
-        <div className="sidebar-head"><div><div className="eyebrow">LIBRARY</div><h2>STORIES</h2></div><button className="square-btn" onClick={() => { setStory(null); setPrompt(''); }}>+</button></div>
-        <div className="story-list">{state.stories.length === 0 ? <div className="empty-sidebar">No stories yet.<br/>Create the first one from the story prompt.</div> : state.stories.map(item => <StoryCard key={item.id} story={item} selected={story?.id === item.id} onClick={() => void selectStory(item.id)}/>)}</div>
+        <div className="sidebar-head"><div><div className="eyebrow">LIBRARY</div><h2>STORIES</h2></div><button className="square-btn" disabled={busy || extracting || Boolean(buildingPrompt) || Boolean(queueing)} onClick={() => { setStory(null); setPrompt(''); setDirective(''); setPromptPreview(null); }}>+</button></div>
+        <div className="story-list">{state.stories.length === 0 ? <div className="empty-sidebar">No stories yet.<br/>Create the first one from the story prompt.</div> : state.stories.map(item => <StoryCard key={item.id} story={item} selected={story?.id === item.id} disabled={busy || extracting || Boolean(buildingPrompt) || Boolean(queueing)} onClick={() => void selectStory(item.id)}/>)}</div>
         <div className="sidebar-foot">LOCAL-FIRST · CANON SAVED TO APP DATA</div>
       </aside>
 
