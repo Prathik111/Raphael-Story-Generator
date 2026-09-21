@@ -62,6 +62,7 @@ export interface Scene {
   negative_prompt: string;
   image_status: 'not_ready' | 'prompt_ready' | 'queued' | 'generated' | 'failed';
   image_url: string | null;
+  comfy_prompt_id: string | null;
 }
 
 export interface Chapter {
@@ -94,6 +95,7 @@ export interface AppSettings {
   llm_api_key: string;
   temperature: number;
   comfyui_url: string;
+  comfyui_workflow_json: string;
 }
 
 export interface AppState {
