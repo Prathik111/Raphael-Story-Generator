@@ -259,6 +259,7 @@ impl Store {
             let story = load_json::<Story>(&path).map_err(|e| {
                 AppError::Storage(format!("failed to load story file {}: {e}", path.display()))
             })?;
+            validate_story_identity(&story)?;
             data.stories.insert(story.id.clone(), story);
         }
 
@@ -288,6 +289,16 @@ fn now() -> String {
 
 fn normalize_name(value: &str) -> String {
     value.trim().to_lowercase()
+}
+
+fn validate_story_identity(story: &Story) -> AppResult<()> {
+    if Uuid::parse_str(&story.id).is_err() {
+        return Err(AppError::Storage(format!("invalid story ID: {}", story.id)));
+    }
+    if story.title.trim().is_empty() {
+        return Err(AppError::Storage(format!("story {} has an empty title", story.id)));
+    }
+    Ok(())
 }
 
 fn http_client() -> AppResult<reqwest::Client> {
@@ -432,6 +443,7 @@ fn require_story(store: &Store, id: &str) -> AppResult<Story> {
     data.stories.get(id).cloned().ok_or_else(|| AppError::StoryNotFound(id.into()))
 }
 fn write_story(store: &Store, story: Story) -> AppResult<Story> {
+    validate_story_identity(&story)?;
     store.persist_story(&story)?;
     store.data.write().map_err(|e| AppError::Storage(e.to_string()))?.stories.insert(story.id.clone(), story.clone());
     Ok(story)
