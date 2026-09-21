@@ -13,12 +13,6 @@ export default defineConfig({
       // Vite should never watch those build artifacts.
       ignored: ['**/src-tauri/target/**'],
     },
-    proxy: {
-      '/api': {
-        target: 'http://127.0.0.1:1421',
-        changeOrigin: true,
-      },
-    },
   },
   envPrefix: ['VITE_', 'TAURI_'],
 });
