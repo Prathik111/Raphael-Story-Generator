@@ -70,6 +70,13 @@ function MetadataPanel({ story }: { story: Story }) {
   </aside>;
 }
 
+function IntroductionView({ story }: { story: Story }) {
+  return <section className="hud-panel reading-panel introduction-panel">
+    <div className="section-head">INTRODUCTION</div>
+    <div className="chapter-text">{story.introduction.split(/\n\s*\n/).map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div>
+  </section>;
+}
+
 function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPrompt, buildingPrompt }: { story: Story; chapter: Chapter; onExtractScenes: () => void; extracting: boolean; onBuildPrompt: (scene: Scene) => void; buildingPrompt: string | null; }) {
   return <div className="chapter-view">
     <div className="chapter-header hud-panel">
@@ -146,17 +153,18 @@ export default function App() {
     <div className="workspace">
       <aside className="sidebar">
         <div className="sidebar-head"><div><div className="eyebrow">LIBRARY</div><h2>STORIES</h2></div><button className="square-btn" onClick={() => { setStory(null); setPrompt(''); }}>+</button></div>
-        <div className="story-list">{state.stories.length === 0 ? <div className="empty-sidebar">No stories yet.<br/>Create the first one from the story prompt.</div> : state.stories.map(item => <StoryCard key={item.id} story={item} selected={story?.id === item.id} onClick={() => void selectStory(item.id)} />)}</div>
+        <div className="story-list">{state.stories.length === 0 ? <div className="empty-sidebar">No stories yet.<br/>Create the first one from the story prompt.</div> : state.stories.map(item => <StoryCard key={item.id} story={item} selected={story?.id === item.id} onClick={() => void selectStory(item.id)}/>)}</div>
         <div className="sidebar-foot">LOCAL-FIRST · CANON SAVED TO APP DATA</div>
       </aside>
 
       <main className="main-panel">
         {error ? <div className="error-box">{error}</div> : null}
-        {!story ? <NewStoryPanel busy={busy} prompt={prompt} setPrompt={setPrompt} onGenerate={() => void generateStory()} /> : <>
+        {!story ? <NewStoryPanel busy={busy} prompt={prompt} setPrompt={setPrompt} onGenerate={() => void generateStory()}/> : <>
           <section className="story-header hud-panel">
             <div><div className="eyebrow">STORY BIBLE · {story.id.slice(0, 8).toUpperCase()}</div><h1>{story.title}</h1><p>{story.bible.premise}</p></div>
             <div className="story-header-tags"><TagRow values={story.metadata.tone} tone="tone"/></div>
           </section>
+          <IntroductionView story={story}/>
           {currentChapter ? <ChapterView story={story} chapter={currentChapter} onExtractScenes={() => void extractScenes(currentChapter)} extracting={extracting} onBuildPrompt={scene => void buildPrompt(scene)} buildingPrompt={buildingPrompt}/> : null}
           <section className="hud-panel continuation-panel">
             <div className="section-head">CONTINUE THE STORY</div>
