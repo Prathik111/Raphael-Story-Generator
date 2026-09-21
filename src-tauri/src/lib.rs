@@ -324,18 +324,34 @@ fn validate_initial_response(parsed: &InitialResponse) -> AppResult<()> {
     Ok(())
 }
 
-fn replace_workflow_placeholders(value: &mut Value, replacements: &[(&str, String)]) {
+fn replace_workflow_placeholders(value: &mut Value, replacements: &[(&str, Value)]) {
     match value {
         Value::String(text) => {
+            let mut whole_replacement = None;
             for (token, replacement) in replacements {
-                *text = text.replace(token, replacement);
+                if text == *token {
+                    whole_replacement = Some(replacement.clone());
+                    break;
+                }
+
+                if let Value::String(replacement_text) = replacement {
+                    *text = text.replace(token, replacement_text);
+                }
+            }
+
+            if let Some(replacement) = whole_replacement {
+                *value = replacement;
             }
         }
         Value::Array(items) => {
-            for item in items { replace_workflow_placeholders(item, replacements); }
+            for item in items {
+                replace_workflow_placeholders(item, replacements);
+            }
         }
         Value::Object(map) => {
-            for item in map.values_mut() { replace_workflow_placeholders(item, replacements); }
+            for item in map.values_mut() {
+                replace_workflow_placeholders(item, replacements);
+            }
         }
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
@@ -607,7 +623,7 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
     replace_workflow_placeholders(&mut workflow, &[
         ("{{POSITIVE_PROMPT}}", Value::String(scene.positive_prompt.clone())),
         ("{{NEGATIVE_PROMPT}}", Value::String(scene.negative_prompt.clone())),
-        ("{{SEED}}", Value::String(seed.to_string())),
+        ("{{SEED}}", Value::Number(serde_json::Number::from(seed))),
         ("{{STORY_ID}}", Value::String(story.id.clone())),
         ("{{SCENE_ID}}", Value::String(scene.id.clone())),
     ]);
