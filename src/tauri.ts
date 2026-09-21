@@ -3,19 +3,14 @@ import type { AppSettings, AppState, SceneExtractionResult, Story } from './type
 
 export const isWebApp = typeof window !== 'undefined' && !(window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 
-async function webCommand<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
-  const response = await fetch('/api/command/' + encodeURIComponent(command), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(args),
-  });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(payload?.error || `Web API request failed: ${response.status}`);
-  return payload as T;
-}
-
-const command = <T,>(name: string, args: Record<string, unknown> = {}) =>
-  isWebApp ? webCommand<T>(name, args) : invoke<T>(name, args);
+const command = <T,>(name: string, args: Record<string, unknown> = {}) => {
+  if (isWebApp) {
+    return Promise.reject(
+      new Error(`Raphael Story Generator requires the Tauri desktop runtime. Use "npm run tauri:dev" for development.`),
+    );
+  }
+  return invoke<T>(name, args);
+};
 
 export const api = {
   isWebApp,
