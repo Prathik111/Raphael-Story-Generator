@@ -8,6 +8,11 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 1420,
     strictPort: true,
+    watch: {
+      // Rust compilation updates files under src-tauri/target continuously.
+      // Vite should never watch those build artifacts.
+      ignored: ['**/src-tauri/target/**'],
+    },
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:1421',
