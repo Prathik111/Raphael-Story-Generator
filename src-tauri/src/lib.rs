@@ -765,8 +765,10 @@ Return:
 {}", story.title, scene.description, scene.location, scene.time, scene.action, scene.composition, scene.dialogue, characters, schema);
     let raw = chat(&settings, system, &user).await?;
     let parsed: ImagePromptResponse = serde_json::from_str(clean_json(&raw)).map_err(|e| AppError::ModelResponse(format!("{}; raw model output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
-    let chapter_mut = story.chapters.iter_mut().find(|c| c.number == chapter_number).unwrap();
-    let scene_mut = chapter_mut.scenes.iter_mut().find(|s| s.id == scene_id).unwrap();
+    let chapter_mut = story.chapters.iter_mut().find(|c| c.number == chapter_number)
+        .ok_or_else(|| AppError::ModelResponse("chapter disappeared while saving scene prompt".into()))?;
+    let scene_mut = chapter_mut.scenes.iter_mut().find(|s| s.id == scene_id)
+        .ok_or_else(|| AppError::ModelResponse("scene disappeared while saving scene prompt".into()))?;
     scene_mut.positive_prompt = parsed.positive_prompt;
     scene_mut.negative_prompt = parsed.negative_prompt;
     scene_mut.image_status = "prompt_ready".into();
@@ -820,8 +822,10 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
         ));
     }
     let prompt_id = value.get("prompt_id").and_then(Value::as_str).ok_or_else(|| AppError::ComfyUi("ComfyUI did not return a prompt_id".into()))?.to_string();
-    let chapter_mut = story.chapters.iter_mut().find(|c| c.number == chapter_number).unwrap();
-    let scene_mut = chapter_mut.scenes.iter_mut().find(|s| s.id == scene_id).unwrap();
+    let chapter_mut = story.chapters.iter_mut().find(|c| c.number == chapter_number)
+        .ok_or_else(|| AppError::ComfyUi("chapter disappeared while updating image status".into()))?;
+    let scene_mut = chapter_mut.scenes.iter_mut().find(|s| s.id == scene_id)
+        .ok_or_else(|| AppError::ComfyUi("scene disappeared while updating image status".into()))?;
     scene_mut.comfy_prompt_id = Some(prompt_id);
     scene_mut.image_status = "queued".into();
     story.updated_at = now();
