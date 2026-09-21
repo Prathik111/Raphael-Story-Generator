@@ -841,3 +841,63 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running Raphael Story Generator");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clean_json_extracts_json_from_wrapped_output() {
+        let value = clean_json("Here is the result:\n{\"ok\":true}\n");
+        assert_eq!(value, "{\"ok\":true}");
+    }
+
+    #[test]
+    fn normalize_name_is_stable_for_matching() {
+        assert_eq!(normalize_name("  Alice  "), "alice");
+    }
+
+    #[test]
+    fn workflow_placeholders_preserve_typed_values() {
+        let mut workflow = json!({
+            "positive": "{{POSITIVE_PROMPT}}",
+            "seed": "{{SEED}}"
+        });
+
+        replace_workflow_placeholders(&mut workflow, &[
+            ("{{POSITIVE_PROMPT}}", Value::String("a hero".into())),
+            ("{{SEED}}", Value::Number(serde_json::Number::from(123_u64))),
+        ]);
+
+        assert_eq!(workflow["positive"], Value::String("a hero".into()));
+        assert_eq!(workflow["seed"], Value::Number(serde_json::Number::from(123_u64)));
+    }
+
+    #[test]
+    fn invalid_story_identity_is_rejected() {
+        let story = Story {
+            id: "../outside".into(),
+            title: "Story".into(),
+            source_prompt: String::new(),
+            metadata: StoryMetadata::default(),
+            introduction: String::new(),
+            bible: StoryBible::default(),
+            chapters: Vec::new(),
+            created_at: now(),
+            updated_at: now(),
+        };
+
+        assert!(validate_story_identity(&story).is_err());
+    }
+
+    #[test]
+    fn invalid_settings_are_rejected() {
+        let mut settings = AppSettings::default();
+        settings.temperature = 2.5;
+        assert!(validate_settings(&settings).is_err());
+
+        settings.temperature = 0.8;
+        settings.comfyui_workflow_json = "not json".into();
+        assert!(validate_settings(&settings).is_err());
+    }
+}
