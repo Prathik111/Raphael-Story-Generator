@@ -455,16 +455,71 @@ JSON shape:
     let mut characters = Vec::with_capacity(parsed.characters.len());
     let mut name_to_id = HashMap::new();
     for (index, draft) in parsed.characters.into_iter().enumerate() {
+        let name = draft.name.trim().to_string();
+        let key = normalize_name(&name);
+        if key.is_empty() {
+            return Err(AppError::ModelResponse("generated character name is empty".into()));
+        }
+        if name_to_id.contains_key(&key) {
+            return Err(AppError::ModelResponse(format!("duplicate generated character name: {}", name)));
+        }
+
         let id = format!("char-{:03}", index + 1);
-        name_to_id.insert(normalize_name(&draft.name), id.clone());
-        characters.push(Character { id, name: draft.name, role: draft.role, personality: draft.personality, appearance: draft.appearance, clothing: draft.clothing, motivations: draft.motivations, current_state: "Introduced in Chapter 1".into() });
+        name_to_id.insert(key, id.clone());
+        characters.push(Character {
+            id,
+            name,
+            role: draft.role,
+            personality: draft.personality,
+            appearance: draft.appearance,
+            clothing: draft.clothing,
+            motivations: draft.motivations,
+            current_state: "Introduced in Chapter 1".into(),
+        });
     }
-    let relationships = parsed.relationships.into_iter().filter_map(|r| Some(Relationship {
-        source_character_id: name_to_id.get(&normalize_name(&r.source))?.clone(),
-        target_character_id: name_to_id.get(&normalize_name(&r.target))?.clone(),
-        relation_type: r.relation_type,
-        description: r.description,
-    })).collect::<Vec<_>>();
+
+    for update in parsed.chapter.character_state_updates.iter() {
+        if let Some(character) = characters.iter_mut().find(|character| {
+            character.id == update.character_id
+                || normalize_name(&character.name) == normalize_name(&update.character_id)
+        }) {
+            character.current_state = update.current_state.clone();
+            if let Some(clothing) = update.clothing.clone() {
+                if !clothing.trim().is_empty() {
+                    character.clothing = clothing;
+                }
+            }
+        }
+    }
+
+    let mut relationships = parsed.relationships.into_iter().filter_map(|r| {
+        Some(Relationship {
+            source_character_id: name_to_id.get(&normalize_name(&r.source))?.clone(),
+            target_character_id: name_to_id.get(&normalize_name(&r.target))?.clone(),
+            relation_type: r.relation_type,
+            description: r.description,
+        })
+    }).collect::<Vec<_>>();
+
+    for update in parsed.chapter.relationship_updates.iter() {
+        let Some(source_id) = name_to_id.get(&normalize_name(&update.source_character)).cloned() else { continue };
+        let Some(target_id) = name_to_id.get(&normalize_name(&update.target_character)).cloned() else { continue };
+
+        if let Some(existing) = relationships.iter_mut().find(|r| {
+            r.source_character_id == source_id && r.target_character_id == target_id
+        }) {
+            existing.relation_type = update.relation_type.clone();
+            existing.description = update.description.clone();
+        } else {
+            relationships.push(Relationship {
+                source_character_id: source_id,
+                target_character_id: target_id,
+                relation_type: update.relation_type.clone(),
+                description: update.description.clone(),
+            });
+        }
+    }
+
     let chapter = Chapter {
         number: 1, title: parsed.chapter.title, summary: parsed.chapter.summary, text: parsed.chapter.text,
         user_directive: None, events: parsed.chapter.events, continuity_updates: parsed.chapter.continuity_updates,
@@ -474,7 +529,18 @@ JSON shape:
     let story = Story {
         id: story_id, title: parsed.title, source_prompt: prompt,
         metadata: parsed.metadata, introduction: parsed.introduction,
-        bible: StoryBible { premise: parsed.premise, central_conflict: parsed.central_conflict, themes: parsed.themes, world_setting: parsed.world_setting, world_rules: parsed.world_rules, locations: parsed.locations, characters, relationships, open_threads: parsed.open_threads.into_iter().chain(parsed.chapter.open_threads).collect(), continuity_notes: Vec::new() },
+        bible: StoryBible {
+            premise: parsed.premise,
+            central_conflict: parsed.central_conflict,
+            themes: parsed.themes,
+            world_setting: parsed.world_setting,
+            world_rules: parsed.world_rules,
+            locations: parsed.locations,
+            characters,
+            relationships,
+            open_threads: parsed.open_threads.into_iter().chain(parsed.chapter.open_threads).collect(),
+            continuity_notes: parsed.chapter.continuity_updates.clone(),
+        },
         chapters: vec![chapter], created_at: created.clone(), updated_at: created,
     };
     write_story(&store, story)
