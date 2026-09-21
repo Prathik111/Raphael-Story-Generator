@@ -8,3 +8,4 @@ src-tauri/icons/icon.ico
 .env
 .env.*
 !.env.example
+public/reference/
