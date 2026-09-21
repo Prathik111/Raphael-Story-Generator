@@ -12,7 +12,7 @@ function formatDate(value: string) {
   const unix = value.match(/^unix:(\\d+)$/);
   try {
     const date = unix ? new Date(Number(unix[1]) * 1000) : new Date(value);
-    return date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
   } catch { return value; }
 }
 
