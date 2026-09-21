@@ -121,7 +121,7 @@ function SettingsOverlay({ settings, onSave, onClose }: { settings: AppSettings;
       <label>Temperature<input type="number" min="0" max="2" step="0.1" value={draft.temperature} onChange={e => setDraft({ ...draft, temperature: Number(e.target.value) || 0 })}/></label>
       <div className="section-head setting-gap">COMFYUI</div>
       <label>API URL<input value={draft.comfyui_url} onChange={e => setDraft({ ...draft, comfyui_url: e.target.value })} placeholder="http://127.0.0.1:8188"/></label>
-      <label>API workflow template<small className="settings-hint">Use placeholders {{POSITIVE_PROMPT}}, {{NEGATIVE_PROMPT}}, {{SEED}}, {{STORY_ID}}, {{SCENE_ID}} anywhere inside the API-format workflow JSON.</small><textarea className="workflow-input" value={draft.comfyui_workflow_json} onChange={e => setDraft({ ...draft, comfyui_workflow_json: e.target.value })} placeholder='Paste a ComfyUI API workflow JSON template here...'/></label>
+      <label>API workflow template<small className="settings-hint">Use placeholders POSITIVE_PROMPT, NEGATIVE_PROMPT, SEED, STORY_ID and SCENE_ID inside the API-format workflow JSON.</small><textarea className="workflow-input" value={draft.comfyui_workflow_json} onChange={e => setDraft({ ...draft, comfyui_workflow_json: e.target.value })} placeholder='Paste a ComfyUI API workflow JSON template here...'/></label>
     </div>
     <footer className="settings-footer"><button className="secondary-btn" onClick={onClose}>CANCEL</button><button className="primary-btn" onClick={() => void save()} disabled={busy}>{busy ? 'SAVING…' : 'SAVE SETTINGS'}</button></footer>
   </section></div>;
