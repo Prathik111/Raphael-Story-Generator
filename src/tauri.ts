@@ -28,6 +28,8 @@ export const api = {
     command<SceneExtractionResult>('extract_scenes', { storyId, chapterNumber }),
   buildScenePrompt: (storyId: string, chapterNumber: number, sceneId: string) =>
     command<Story>('build_scene_prompt', { storyId, chapterNumber, sceneId }),
+  queueSceneImage: (storyId: string, chapterNumber: number, sceneId: string) =>
+    command<Story>('queue_scene_image', { storyId, chapterNumber, sceneId }),
   saveSettings: (settings: AppSettings) => command<AppSettings>('save_settings', { settings }),
   getSettings: () => command<AppSettings>('get_settings'),
 };
