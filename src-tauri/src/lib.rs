@@ -16,6 +16,8 @@ enum AppError {
     Llm(String),
     #[error("storage error: {0}")]
     Storage(String),
+    #[error("ComfyUI error: {0}")]
+    ComfyUi(String),
 }
 impl serde::Serialize for AppError {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: serde::Serializer {
@@ -25,12 +27,14 @@ impl serde::Serialize for AppError {
 type AppResult<T> = Result<T, AppError>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppSettings {
     pub llm_base_url: String,
     pub llm_model: String,
     pub llm_api_key: String,
     pub temperature: f32,
     pub comfyui_url: String,
+    pub comfyui_workflow_json: String,
 }
 impl Default for AppSettings {
     fn default() -> Self {
@@ -40,6 +44,7 @@ impl Default for AppSettings {
             llm_api_key: String::new(),
             temperature: 0.8,
             comfyui_url: "http://127.0.0.1:8188".into(),
+            comfyui_workflow_json: String::new(),
         }
     }
 }
@@ -88,6 +93,7 @@ pub struct StoryBible {
     pub continuity_notes: Vec<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Scene {
     pub id: String,
     pub order: usize,
@@ -102,6 +108,7 @@ pub struct Scene {
     pub negative_prompt: String,
     pub image_status: String,
     pub image_url: Option<String>,
+    pub comfy_prompt_id: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chapter {
@@ -288,6 +295,23 @@ fn clean_json(raw: &str) -> &str {
     }
     trimmed
 }
+fn replace_workflow_placeholders(value: &mut Value, replacements: &[(&str, String)]) {
+    match value {
+        Value::String(text) => {
+            for (token, replacement) in replacements {
+                *text = text.replace(token, replacement);
+            }
+        }
+        Value::Array(items) => {
+            for item in items { replace_workflow_placeholders(item, replacements); }
+        }
+        Value::Object(map) => {
+            for item in map.values_mut() { replace_workflow_placeholders(item, replacements); }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
 fn require_story(store: &Store, id: &str) -> AppResult<Story> {
     let data = store.data.read().map_err(|e| AppError::Storage(e.to_string()))?;
     data.stories.get(id).cloned().ok_or_else(|| AppError::StoryNotFound(id.into()))
@@ -488,7 +512,7 @@ Return:
         id: format!("{}-scene-{:03}", chapter.number, index + 1), order: index + 1, description: scene.description,
         location: scene.location, time: scene.time, characters: scene.characters, action: scene.action,
         composition: scene.composition, dialogue: scene.dialogue, positive_prompt: String::new(),
-        negative_prompt: String::new(), image_status: "not_ready".into(), image_url: None,
+        negative_prompt: String::new(), image_status: "not_ready".into(), image_url: None, comfy_prompt_id: None,
     }).collect::<Vec<_>>();
     story.chapters[chapter_index].scenes = scenes.clone(); story.updated_at = now(); write_story(&store, story)?;
     Ok(SceneExtractionResult { chapter_number, scenes })
@@ -528,6 +552,49 @@ Return:
     scene_mut.image_status = "prompt_ready".into();
     story.updated_at = now(); write_story(&store, story)
 }
+#[tauri::command]
+async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: String, store: State<'_, Store>) -> AppResult<Story> {
+    let mut story = require_story(&store, &story_id)?;
+    let settings = store.settings.read().map_err(|e| AppError::Storage(e.to_string()))?.clone();
+    if settings.comfyui_url.trim().is_empty() {
+        return Err(AppError::ComfyUi("configure the ComfyUI URL in settings".into()));
+    }
+    if settings.comfyui_workflow_json.trim().is_empty() {
+        return Err(AppError::ComfyUi("configure a ComfyUI API workflow template in settings".into()));
+    }
+    let chapter = story.chapters.iter().find(|c| c.number == chapter_number).ok_or_else(|| AppError::ComfyUi("chapter not found".into()))?;
+    let scene = chapter.scenes.iter().find(|s| s.id == scene_id).ok_or_else(|| AppError::ComfyUi("scene not found".into()))?;
+    if scene.positive_prompt.trim().is_empty() {
+        return Err(AppError::ComfyUi("build the scene prompt before queuing the image".into()));
+    }
+    let mut workflow: Value = serde_json::from_str(&settings.comfyui_workflow_json)
+        .map_err(|e| AppError::ComfyUi(format!("workflow JSON is invalid: {e}")))?;
+    replace_workflow_placeholders(&mut workflow, &[
+        ("{{POSITIVE_PROMPT}}", scene.positive_prompt.clone()),
+        ("{{NEGATIVE_PROMPT}}", scene.negative_prompt.clone()),
+        ("{{SEED}}", uuid::Uuid::new_v4().as_u128().to_string()),
+        ("{{STORY_ID}}", story.id.clone()),
+        ("{{SCENE_ID}}", scene.id.clone()),
+    ]);
+    let url = format!("{}/prompt", settings.comfyui_url.trim_end_matches('/'));
+    let response = reqwest::Client::new().post(url).json(&json!({
+        "prompt": workflow,
+        "client_id": format!("raphael-story-{}", story.id),
+    })).send().await.map_err(|e| AppError::ComfyUi(e.to_string()))?;
+    let status = response.status();
+    let value: Value = response.json().await.map_err(|e| AppError::ComfyUi(e.to_string()))?;
+    if !status.is_success() {
+        return Err(AppError::ComfyUi(value.get("error").and_then(Value::as_str).unwrap_or("ComfyUI rejected the workflow").to_string()));
+    }
+    let prompt_id = value.get("prompt_id").and_then(Value::as_str).ok_or_else(|| AppError::ComfyUi("ComfyUI did not return a prompt_id".into()))?.to_string();
+    let chapter_mut = story.chapters.iter_mut().find(|c| c.number == chapter_number).unwrap();
+    let scene_mut = chapter_mut.scenes.iter_mut().find(|s| s.id == scene_id).unwrap();
+    scene_mut.comfy_prompt_id = Some(prompt_id);
+    scene_mut.image_status = "queued".into();
+    story.updated_at = now();
+    write_story(&store, story)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -537,7 +604,7 @@ pub fn run() {
             app.manage(store);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_app_state, get_story, get_settings, save_settings, create_story, generate_next_chapter, extract_scenes, build_scene_prompt])
+        .invoke_handler(tauri::generate_handler![get_app_state, get_story, get_settings, save_settings, create_story, generate_next_chapter, extract_scenes, build_scene_prompt, queue_scene_image])
         .run(tauri::generate_context!())
         .expect("error while running Raphael Story Generator");
 }
