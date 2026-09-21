@@ -6,16 +6,18 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "npm run prepare:reference && tsc && vite build",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "prepare:reference": "node scripts/prepare-reference.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "react-dom": "^19.1.1",
+    "three": "0.128.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.4",
