@@ -11,7 +11,7 @@ User prompt
   -> Chapter N continuation + optional user directive
   -> Scene extractor
   -> Image-builder prompt generation
-  -> ComfyUI adapter (next integration stage)
+  -> ComfyUI API workflow queue
 ```
 
 ## Canonical state
@@ -51,3 +51,18 @@ npm run tauri:dev
 ## Notes
 
 Scene extraction and image prompt generation are implemented as independent stages so they can later connect to the Raphael Model Manager model/LoRA registry and ComfyUI workflow selector without changing story canon.
+
+
+## ComfyUI workflow queue
+
+The image builder can queue a scene through ComfyUI's `/prompt` API. In Settings, paste a ComfyUI API-format workflow JSON template and use these placeholders inside string values:
+
+- `{{POSITIVE_PROMPT}}`
+- `{{NEGATIVE_PROMPT}}`
+- `{{SEED}}`
+- `{{STORY_ID}}`
+- `{{SCENE_ID}}`
+
+The workflow itself owns the checkpoint, LoRA, sampler, resolution and other generation nodes. This keeps the story engine independent from a particular model library while still allowing a production workflow to be queued directly.
+
+Automatic model/LoRA discovery from Raphael Model Manager is intentionally left behind an adapter boundary for the next integration stage.
