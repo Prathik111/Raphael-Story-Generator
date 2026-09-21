@@ -322,6 +322,21 @@ fn validate_initial_response(parsed: &InitialResponse) -> AppResult<()> {
     Ok(())
 }
 
+fn validate_scene_response(parsed: &SceneResponse) -> AppResult<()> {
+    if parsed.scenes.is_empty() {
+        return Err(AppError::ModelResponse("scene extraction returned no scenes".into()));
+    }
+    for (index, scene) in parsed.scenes.iter().enumerate() {
+        if scene.description.trim().is_empty() {
+            return Err(AppError::ModelResponse(format!(
+                "scene {} has an empty description",
+                index + 1
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate_chapter_draft(parsed: &ChapterDraft, chapter_number: usize) -> AppResult<()> {
     if parsed.title.trim().is_empty() || parsed.text.trim().is_empty() {
         return Err(AppError::ModelResponse(format!(
@@ -661,6 +676,7 @@ Return:
 {}", chapter.number, chapter.title, chapter.text, visual_characters, schema);
     let raw = chat(&settings, system, &user).await?;
     let parsed: SceneResponse = serde_json::from_str(clean_json(&raw)).map_err(|e| AppError::ModelResponse(format!("{}; raw model output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
+    validate_scene_response(&parsed)?;
     let scenes = parsed.scenes.into_iter().enumerate().map(|(index, scene)| Scene {
         id: format!("{}-scene-{:03}", chapter.number, index + 1), order: index + 1, description: scene.description,
         location: scene.location, time: scene.time, characters: scene.characters, action: scene.action,
@@ -676,9 +692,28 @@ async fn build_scene_prompt(story_id: String, chapter_number: usize, scene_id: S
     let settings = store.settings.read().map_err(|e| AppError::Storage(e.to_string()))?.clone();
     let chapter = story.chapters.iter().find(|c| c.number == chapter_number).ok_or_else(|| AppError::ModelResponse("chapter not found".into()))?;
     let scene = chapter.scenes.iter().find(|s| s.id == scene_id).ok_or_else(|| AppError::ModelResponse("scene not found".into()))?;
-    let characters = story.bible.characters.iter().filter(|c| {
-        scene.characters.iter().any(|name| name.trim() == c.id || normalize_name(name) == normalize_name(&c.name))
-    }).map(|c| format!("{} — appearance: {}; clothing: {}; personality: {:?}", c.name, c.appearance, c.clothing, c.personality)).collect::<Vec<_>>().join("
+    let matched_ids = story.bible.characters.iter()
+        .filter(|c| scene.characters.iter().any(|name| name.trim() == c.id || normalize_name(name) == normalize_name(&c.name)))
+        .map(|c| c.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let unknown_characters = scene.characters.iter()
+        .filter(|name| {
+            !story.bible.characters.iter().any(|c| {
+                name.trim() == c.id || normalize_name(name) == normalize_name(&c.name)
+            })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unknown_characters.is_empty() {
+        return Err(AppError::ModelResponse(format!(
+            "scene references unknown characters: {}",
+            unknown_characters.join(", ")
+        )));
+    }
+    let characters = story.bible.characters.iter()
+        .filter(|c| matched_ids.contains(c.id.as_str()))
+        .map(|c| format!("{} — appearance: {}; clothing: {}; personality: {:?}", c.name, c.appearance, c.clothing, c.personality))
+        .collect::<Vec<_>>().join("
 ");
     let system = r#"
 You are Raphael Image Builder prompt director. Convert one scene into a positive and negative image-generation prompt suitable for an anime/manga diffusion workflow.
