@@ -80,7 +80,7 @@ function IntroductionView({ story }: { story: Story }) {
   </section>;
 }
 
-function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPrompt, onViewPrompt, buildingPrompt }: { story: Story; chapter: Chapter; onExtractScenes: () => void; extracting: boolean; onBuildPrompt: (scene: Scene) => void; onViewPrompt: (scene: Scene) => void; buildingPrompt: string | null; }) {
+function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPrompt, onViewPrompt, onQueueImage, buildingPrompt, queueing }: { story: Story; chapter: Chapter; onExtractScenes: () => void; extracting: boolean; onBuildPrompt: (scene: Scene) => void; onViewPrompt: (scene: Scene) => void; onQueueImage: (scene: Scene) => void; buildingPrompt: string | null; queueing: string | null; }) {
   return <div className="chapter-view">
     <div className="chapter-header hud-panel">
       <div><div className="eyebrow">CHAPTER {String(chapter.number).padStart(2, '0')}</div><h2>{chapter.title}</h2></div>
@@ -102,7 +102,7 @@ function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPromp
         <div className="scene-index">SCENE {String(scene.order).padStart(2, '0')}</div><h3>{scene.description}</h3>
         <div className="scene-meta"><span>{scene.location || 'UNKNOWN LOCATION'}</span><span>{scene.time || 'TIME UNSPECIFIED'}</span></div>
         <p className="scene-action">{scene.action}</p>
-        <div className="scene-footer"><span className={`scene-status ${scene.image_status}`}>{scene.image_status.replace('_', ' ').toUpperCase()}</span><button className="text-btn" onClick={() => scene.positive_prompt ? onViewPrompt(scene) : onBuildPrompt(scene)} disabled={buildingPrompt === scene.id}>{buildingPrompt === scene.id ? 'BUILDING…' : scene.positive_prompt ? 'VIEW PROMPT' : 'BUILD IMAGE PROMPT'}</button></div>
+        <div className="scene-footer"><span className={`scene-status ${scene.image_status}`}>{scene.image_status.replace('_', ' ').toUpperCase()}</span><div className="scene-actions"><button className="text-btn" onClick={() => scene.positive_prompt ? onViewPrompt(scene) : onBuildPrompt(scene)} disabled={buildingPrompt === scene.id || queueing === scene.id}>{buildingPrompt === scene.id ? 'BUILDING…' : scene.positive_prompt ? 'VIEW PROMPT' : 'BUILD IMAGE PROMPT'}</button>{scene.positive_prompt ? <button className="text-btn queue-btn" onClick={() => onQueueImage(scene)} disabled={queueing === scene.id}>{queueing === scene.id ? 'QUEUING…' : scene.image_status === 'queued' ? 'REQUEUE IMAGE' : 'QUEUE IMAGE'}</button> : null}</div></div>
       </article>)}</div>}
     </section>
   </div>;
@@ -121,6 +121,7 @@ function SettingsOverlay({ settings, onSave, onClose }: { settings: AppSettings;
       <label>Temperature<input type="number" min="0" max="2" step="0.1" value={draft.temperature} onChange={e => setDraft({ ...draft, temperature: Number(e.target.value) || 0 })}/></label>
       <div className="section-head setting-gap">COMFYUI</div>
       <label>API URL<input value={draft.comfyui_url} onChange={e => setDraft({ ...draft, comfyui_url: e.target.value })} placeholder="http://127.0.0.1:8188"/></label>
+      <label>API workflow template<small className="settings-hint">Use placeholders {{POSITIVE_PROMPT}}, {{NEGATIVE_PROMPT}}, {{SEED}}, {{STORY_ID}}, {{SCENE_ID}} anywhere inside the API-format workflow JSON.</small><textarea className="workflow-input" value={draft.comfyui_workflow_json} onChange={e => setDraft({ ...draft, comfyui_workflow_json: e.target.value })} placeholder='Paste a ComfyUI API workflow JSON template here...'/></label>
     </div>
     <footer className="settings-footer"><button className="secondary-btn" onClick={onClose}>CANCEL</button><button className="primary-btn" onClick={() => void save()} disabled={busy}>{busy ? 'SAVING…' : 'SAVE SETTINGS'}</button></footer>
   </section></div>;
@@ -129,7 +130,7 @@ function SettingsOverlay({ settings, onSave, onClose }: { settings: AppSettings;
 export default function App() {
   const [state, setState] = useState<AppState | null>(null); const [story, setStory] = useState<Story | null>(null);
   const [prompt, setPrompt] = useState(''); const [directive, setDirective] = useState('');
-  const [busy, setBusy] = useState(false); const [extracting, setExtracting] = useState(false); const [buildingPrompt, setBuildingPrompt] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false); const [extracting, setExtracting] = useState(false); const [buildingPrompt, setBuildingPrompt] = useState<string | null>(null); const [queueing, setQueueing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null); const [settingsOpen, setSettingsOpen] = useState(false); const [promptPreview, setPromptPreview] = useState<Scene | null>(null);
 
   const loadState = async () => { const next = await api.getState(); setState(next); return next; };
@@ -142,6 +143,7 @@ export default function App() {
   const extractScenes = async (chapter: Chapter) => { if (!story || extracting) return; setExtracting(true); setError(null); try { await api.extractScenes(story.id, chapter.number); setStory(await api.getStory(story.id)); await loadState(); } catch (e) { setError(String(e)); } finally { setExtracting(false); } };
   const buildPrompt = async (scene: Scene) => { if (!story || buildingPrompt) return; const chapter = story.chapters.find(c => c.scenes.some(s => s.id === scene.id)); if (!chapter) return; setBuildingPrompt(scene.id); setError(null); try { setStory(await api.buildScenePrompt(story.id, chapter.number, scene.id)); await loadState(); } catch (e) { setError(String(e)); } finally { setBuildingPrompt(null); } };
   const viewPrompt = (scene: Scene) => setPromptPreview(scene);
+  const queueImage = async (scene: Scene) => { if (!story || queueing) return; const chapter = story.chapters.find(c => c.scenes.some(s => s.id === scene.id)); if (!chapter) return; setQueueing(scene.id); setError(null); try { setStory(await api.queueSceneImage(story.id, chapter.number, scene.id)); await loadState(); } catch (e) { setError(String(e)); } finally { setQueueing(null); } };
 
   const currentChapter = story?.chapters[story.chapters.length - 1] || null;
   const totalScenes = useMemo(() => story?.chapters.reduce((n, c) => n + c.scenes.length, 0) || 0, [story]);
@@ -169,7 +171,7 @@ export default function App() {
             <div className="story-header-tags"><TagRow values={story.metadata.tone} tone="tone"/></div>
           </section>
           <IntroductionView story={story}/>
-          {currentChapter ? <ChapterView story={story} chapter={currentChapter} onExtractScenes={() => void extractScenes(currentChapter)} extracting={extracting} onBuildPrompt={scene => void buildPrompt(scene)} onViewPrompt={viewPrompt} buildingPrompt={buildingPrompt}/> : null}
+          {currentChapter ? <ChapterView story={story} chapter={currentChapter} onExtractScenes={() => void extractScenes(currentChapter)} extracting={extracting} onBuildPrompt={scene => void buildPrompt(scene)} onViewPrompt={viewPrompt} onQueueImage={queueImage} buildingPrompt={buildingPrompt} queueing={queueing}/> : null}
           <section className="hud-panel continuation-panel">
             <div className="section-head">CONTINUE THE STORY</div>
             <h2>Chapter {story.chapters.length + 1}</h2>
