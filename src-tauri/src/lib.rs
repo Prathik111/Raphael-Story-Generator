@@ -1,3 +1,4 @@
+mod registry;
 mod workflow_builder;
 
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
