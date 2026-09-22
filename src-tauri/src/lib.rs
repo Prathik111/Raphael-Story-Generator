@@ -1404,7 +1404,7 @@ Return:
         id: format!("{}-scene-{:03}", chapter.number, index + 1), order: index + 1, description: scene.description,
         location: scene.location, time: scene.time, characters: scene.characters, action: scene.action,
         composition: scene.composition, dialogue: scene.dialogue, positive_prompt: String::new(),
-        negative_prompt: String::new(), selected_loras: Vec::new(), image_status: "not_ready".into(), image_url: None, image_path: None, image_mime: None, image_error: None, comfy_prompt_id: None,
+        negative_prompt: String::new(), selected_loras: Vec::new(), image_status: "not_ready".into(), image_url: None, image_path: None, image_mime: None, image_error: None, image_width: 1024, image_height: 1024, comfy_prompt_id: None,
     }).collect::<Vec<_>>();
     story.chapters[chapter_index].scenes = scenes.clone(); story.updated_at = now(); write_story(&store, story)?;
     Ok(SceneExtractionResult { chapter_number, scenes })
