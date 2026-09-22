@@ -77,6 +77,11 @@ The Engine Settings panel exposes a separate editable system prompt for each sta
 
 Web research settings include the local SearXNG URL, local Tor/SOCKS5 proxy, fail-closed proxy requirement, result/source limits, and research extractor prompt. These settings are persisted with the local application settings.
 
+
+### Live service health
+
+The top status strip and **Raphael Services** panel actively probe the configured Registry, SearXNG search API, and ComfyUI `/system_stats` endpoint. The UI reports CHECKING, ONLINE, OFFLINE, or DISABLED from those real API probes; these are not static labels.
+
 ## Prerequisites
 
 For the full local production pipeline, Raphael currently expects:
@@ -120,8 +125,11 @@ In Settings, paste a ComfyUI API-format workflow JSON template and use these pla
 - `{{SEED}}`
 - `{{STORY_ID}}`
 - `{{SCENE_ID}}`
+- `{{IMAGE_WIDTH}}`
+- `{{IMAGE_HEIGHT}}`
+- `{{IMAGE_SIZE}}`
 
-The workflow itself owns the checkpoint, LoRA, sampler, resolution and other generation nodes. This keeps the story engine independent from a particular model library while still allowing a production workflow to be queued directly.
+The image-prompt LLM chooses one approved resolution for each scene (for example 1024×1024, 1216×832 or 832×1216). Raphael validates that choice and deterministically injects it into an Empty*Latent node or explicit size placeholders; a workflow without a valid size injection point is rejected instead of silently ignoring the requested size. The workflow itself still owns the checkpoint, LoRA, sampler and other generation nodes.
 
 Use `"{{SEED}}"` as the complete value of a numeric seed field. Raphael converts that exact placeholder into a JSON number; embedded text such as `"seed={{SEED}}"` remains a string.
 
@@ -166,3 +174,8 @@ Queue workflow
 ~~~
 
 If the ComfyUI WebSocket is unavailable, Raphael falls back to /history/{prompt_id} and /queue polling so completed generations are still detected. Queued jobs are resumed when the application starts again.
+
+
+## Research visibility
+
+When private research is enabled, the story view shows the actual search queries, fetched source titles/URLs/snippets, source-backed facts and the raw WEB RESEARCH LLM extractor response in the live trace. This makes it possible to inspect what search returned before the Story Architect uses the extracted facts.
