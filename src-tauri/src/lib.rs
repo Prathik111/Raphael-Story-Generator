@@ -1353,6 +1353,20 @@ Return:
     let raw = chat(store.app(), &settings, "scene_director", system, &user).await?;
     let parsed: SceneResponse = serde_json::from_str(clean_json(&raw)).map_err(|e| AppError::ModelResponse(format!("{}; raw model output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
     validate_scene_response(&parsed)?;
+    for scene in &parsed.scenes {
+        for character_name in &scene.characters {
+            let known = story.bible.characters.iter().any(|character| {
+                character_name.trim() == character.id
+                    || normalize_name(character_name) == normalize_name(&character.name)
+            });
+            if !known {
+                return Err(AppError::ModelResponse(format!(
+                    "scene references unknown character '{}'",
+                    character_name
+                )));
+            }
+        }
+    }
     let scenes = parsed.scenes.into_iter().enumerate().map(|(index, scene)| Scene {
         id: format!("{}-scene-{:03}", chapter.number, index + 1), order: index + 1, description: scene.description,
         location: scene.location, time: scene.time, characters: scene.characters, action: scene.action,
@@ -1582,8 +1596,19 @@ Return:
         .map_err(|e| AppError::ModelResponse(format!("LoRA selector output was invalid: {}; raw output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
 
     let candidate_map = candidates.iter().map(|m| (m.id.clone(), m)).collect::<HashMap<_, _>>();
+    let allowed_characters = story.bible.characters.iter()
+        .filter(|character| {
+            scene.characters.iter().any(|name| {
+                normalize_name(name) == normalize_name(&character.name) || name.trim() == character.id
+            })
+        })
+        .take(2)
+        .map(|character| (character.id.clone(), normalize_name(&character.name), character.name.clone()))
+        .collect::<Vec<_>>();
+
     let mut result = Vec::new();
     let mut used = std::collections::HashSet::new();
+    let mut used_characters = std::collections::HashSet::new();
     let mut character_count = 0usize;
     let mut concept_count = 0usize;
 
@@ -1598,11 +1623,33 @@ Return:
         if role != "character" && role != "concept_pose" {
             continue;
         }
-        if role == "character" {
-            if character_count >= scene.characters.len().min(2) {
+        let canonical_character = if role == "character" {
+            let Some(requested_character) = draft.character.as_deref().map(str::trim).filter(|value| !value.is_empty()) else {
+                continue;
+            };
+            let Some((character_id, character_key, character_name)) = allowed_characters.iter().find(|(id, name, _)| {
+                requested_character == id || normalize_name(requested_character) == *name
+            }) else {
+                continue;
+            };
+            if !used_characters.insert(character_key.clone()) {
                 continue;
             }
             character_count += 1;
+            let _ = character_id;
+            Some(character_name.clone())
+        } else {
+            if concept_count >= 1 {
+                continue;
+            }
+            concept_count += 1;
+            None
+        };
+
+        if role == "character" {
+            if character_count > scene.characters.len().min(2) {
+                continue;
+            }
         } else {
             if concept_count >= 1 {
                 continue;
@@ -1621,7 +1668,7 @@ Return:
             id: model.id.clone(),
             name: model.name.clone(),
             role,
-            character: draft.character.filter(|value| !value.trim().is_empty()),
+            character: canonical_character,
             weight,
             file_name: artifact.file_name,
             activation_prompts: artifact.activation_prompts,
@@ -1748,7 +1795,7 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
         .ok_or_else(|| AppError::ComfyUi("chapter disappeared while updating image status".into()))?;
     let scene_mut = chapter_mut.scenes.iter_mut().find(|s| s.id == scene_id)
         .ok_or_else(|| AppError::ComfyUi("scene disappeared while updating image status".into()))?;
-    emit_pipeline(store.app(), "comfyui", "completed", "ComfyUI accepted the workflow");
+    emit_pipeline(store.app(), "comfyui", "running", "ComfyUI accepted the workflow; monitoring generation");
     scene_mut.comfy_prompt_id = Some(prompt_id.clone());
     scene_mut.image_status = "queued".into();
     scene_mut.image_error = None;
@@ -1756,7 +1803,6 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
     scene_mut.image_mime = None;
     story.updated_at = now();
     let queued = write_story(&store, story)?;
-    emit_pipeline(store.app(), "comfyui", "completed", "ComfyUI accepted the workflow");
     comfyui::spawn_generation_monitor(
         store.app().clone(),
         settings.comfyui_url.clone(),
