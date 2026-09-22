@@ -61,21 +61,98 @@ fn emit(app: &AppHandle, story_id: &str, chapter_number: usize, scene_id: &str, 
     );
 }
 
+async fn probe_endpoint(client: &Client, base: &Url, path: &str) -> AppResult<()> {
+    let url = base
+        .join(path)
+        .map_err(|error| AppError::ComfyUi(format!("invalid ComfyUI {path} URL: {error}")))?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| AppError::ComfyUi(format!("ComfyUI {path} health check failed: {error}")))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| AppError::ComfyUi(format!("failed to read ComfyUI {path} health response: {error}")))?;
+
+    if !status.is_success() {
+        return Err(AppError::ComfyUi(format!(
+            "ComfyUI {path} returned HTTP {}: {}",
+            status,
+            body.chars().take(200).collect::<String>()
+        )));
+    }
+
+    let value: Value = serde_json::from_str(&body)
+        .map_err(|error| AppError::ComfyUi(format!("ComfyUI {path} response was not valid JSON: {error}")))?;
+
+    if !value.is_object() {
+        return Err(AppError::ComfyUi(format!("ComfyUI {path} did not return a JSON object")));
+    }
+
+    Ok(())
+}
+
 pub async fn check_api(raw: &str) -> AppResult<()> {
     let base = base_url(raw)?;
     let client = http_client()?;
-    let url = base.join("system_stats").map_err(|error| AppError::ComfyUi(format!("invalid ComfyUI system stats URL: {error}")))?;
-    let response = client.get(url).send().await.map_err(|error| AppError::ComfyUi(format!("ComfyUI health check failed: {error}")))?;
-    let status = response.status();
-    let body = response.text().await.map_err(|error| AppError::ComfyUi(format!("failed to read ComfyUI health response: {error}")))?;
-    if !status.is_success() {
-        return Err(AppError::ComfyUi(format!("ComfyUI /system_stats returned HTTP {}: {}", status, body.chars().take(300).collect::<String>())));
+    let mut errors = Vec::new();
+
+    for endpoint in ["system_stats", "queue", "object_info"] {
+        match probe_endpoint(&client, &base, endpoint).await {
+            Ok(()) => return Ok(()),
+            Err(error) => errors.push(error.to_string()),
+        }
     }
-    let value: Value = serde_json::from_str(&body).map_err(|error| AppError::ComfyUi(format!("ComfyUI health response was not valid JSON: {error}")))?;
-    if !value.is_object() {
-        return Err(AppError::ComfyUi("ComfyUI /system_stats did not return a JSON object".into()));
+
+    Err(AppError::ComfyUi(format!(
+        "ComfyUI was not detected at {}. Tried /system_stats, /queue, and /object_info. {}",
+        base,
+        errors.join(" | ")
+    )))
+}
+
+pub async fn detect_api_url(configured: &str) -> AppResult<String> {
+    let mut candidates = Vec::<String>::new();
+
+    if let Ok(value) = std::env::var("RAPHAEL_COMFYUI_URL") {
+        let value = value.trim();
+        if !value.is_empty() {
+            candidates.push(value.to_string());
+        }
     }
-    Ok(())
+
+    let configured = configured.trim();
+    if !configured.is_empty() {
+        candidates.push(configured.to_string());
+    }
+
+    candidates.extend([
+        "http://127.0.0.1:8188".to_string(),
+        "http://localhost:8188".to_string(),
+    ]);
+
+    let client = http_client()?;
+    let mut errors = Vec::new();
+
+    for candidate in candidates {
+        let Ok(base) = base_url(&candidate) else {
+            continue;
+        };
+
+        for endpoint in ["system_stats", "queue", "object_info"] {
+            match probe_endpoint(&client, &base, endpoint).await {
+                Ok(()) => return Ok(base.to_string().trim_end_matches('/').to_string()),
+                Err(error) => errors.push(format!("{}{}: {}", base, endpoint, error)),
+            }
+        }
+    }
+
+    Err(AppError::ComfyUi(format!(
+        "ComfyUI was not detected on the configured URL or local port 8188. {}",
+        errors.join(" | ")
+    )))
 }
 fn http_client() -> AppResult<Client> {
     Client::builder()
@@ -427,6 +504,19 @@ mod tests {
     fn ws_urls_follow_http_scheme() {
         let url = ws_url("http://127.0.0.1:8188", "client").unwrap();
         assert_eq!(url.as_str(), "ws://127.0.0.1:8188/ws?clientId=client");
+    }
+
+    #[test]
+    fn detection_candidates_include_configured_and_local_default() {
+        let configured = "http://192.168.1.20:8188";
+        let mut candidates = vec![configured.to_string()];
+        candidates.extend([
+            "http://127.0.0.1:8188".to_string(),
+            "http://localhost:8188".to_string(),
+        ]);
+        assert!(candidates.contains(&configured.to_string()));
+        assert!(candidates.contains(&"http://127.0.0.1:8188".to_string()));
+        assert!(candidates.contains(&"http://localhost:8188".to_string()));
     }
 
     #[test]
