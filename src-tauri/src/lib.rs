@@ -815,6 +815,26 @@ fn validate_settings(settings: &AppSettings) -> AppResult<()> {
     if !settings.temperature.is_finite() || !(0.0..=2.0).contains(&settings.temperature) {
         return Err(AppError::Llm("temperature must be between 0 and 2".into()));
     }
+    if settings.web_search_max_results == 0 || settings.web_search_max_results > 12 {
+        return Err(AppError::WebResearch("web search results must be between 1 and 12".into()));
+    }
+    if settings.web_fetch_max_chars < 2_000 || settings.web_fetch_max_chars > 12_000 {
+        return Err(AppError::WebResearch("web page text limit must be between 2,000 and 12,000 characters".into()));
+    }
+    if settings.web_context_max_chars < 8_000 || settings.web_context_max_chars > 48_000 {
+        return Err(AppError::WebResearch("web research context limit must be between 8,000 and 48,000 characters".into()));
+    }
+    if settings.web_research_enabled {
+        if settings.web_search_url.trim().is_empty() {
+            return Err(AppError::WebResearch("private web research requires a local SearXNG URL".into()));
+        }
+        if settings.web_require_proxy && settings.web_proxy_url.trim().is_empty() {
+            return Err(AppError::WebResearch("private web research requires a local SOCKS/Tor proxy".into()));
+        }
+        if settings.web_research_system_prompt.trim().is_empty() {
+            return Err(AppError::WebResearch("web research extractor system prompt cannot be empty".into()));
+        }
+    }
     for (name, prompt) in [
         ("Story Architect", &settings.story_architect_system_prompt),
         ("Continuity Writer", &settings.continuity_writer_system_prompt),
