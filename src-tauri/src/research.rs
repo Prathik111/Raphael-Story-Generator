@@ -464,7 +464,7 @@ fn evidence_supported(evidence: &str, source: &ResearchSource) -> bool {
         .collect::<std::collections::HashSet<_>>();
     let overlap = evidence_tokens
         .iter()
-        .filter(|token| content_tokens.contains(token))
+        .filter(|token| content_tokens.contains(*token))
         .count();
 
     overlap * 100 / evidence_tokens.len() >= 80
