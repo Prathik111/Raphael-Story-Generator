@@ -9,7 +9,8 @@
     "build": "tsc && vite build",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
+    "tauri:icons": "tauri icon src-tauri/app-icon.svg",
+    "tauri:build": "npm run tauri:icons && tauri build",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
