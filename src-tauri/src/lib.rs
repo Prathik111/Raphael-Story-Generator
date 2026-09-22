@@ -1627,8 +1627,9 @@ Return:
             let Some(requested_character) = draft.character.as_deref().map(str::trim).filter(|value| !value.is_empty()) else {
                 continue;
             };
-            let Some((character_id, character_key, character_name)) = allowed_characters.iter().find(|(id, name, _)| {
-                requested_character == id || normalize_name(requested_character) == *name
+            let Some((_character_id, character_key, character_name)) = allowed_characters.iter().find(|entry| {
+                requested_character == entry.0.as_str()
+                    || normalize_name(requested_character) == entry.1
             }) else {
                 continue;
             };
@@ -1636,7 +1637,6 @@ Return:
                 continue;
             }
             character_count += 1;
-            let _ = character_id;
             Some(character_name.clone())
         } else {
             if concept_count >= 1 {
@@ -1872,6 +1872,7 @@ pub fn run() {
                 .read()
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
                 .clone();
+            let comfyui_url = web_settings.comfyui_url.clone();
             app.manage(store);
 
             if web_settings.web_research_enabled {
@@ -1885,7 +1886,7 @@ pub fn run() {
                 });
             }
 
-            comfyui::resume_queued_generations(app.handle(), &web_settings.comfyui_url);
+            comfyui::resume_queued_generations(app.handle(), &comfyui_url);
 
             Ok(())
         })

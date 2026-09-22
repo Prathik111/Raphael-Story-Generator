@@ -8,7 +8,7 @@ use std::{
 };
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::time::{sleep, timeout};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use url::Url;
@@ -77,7 +77,8 @@ fn base_url(raw: &str) -> AppResult<Url> {
     }
     url.set_query(None);
     url.set_fragment(None);
-    url.set_path(url.path().trim_end_matches('/'));
+    let path = url.path().trim_end_matches('/').to_string();
+    url.set_path(&path);
     Ok(url)
 }
 

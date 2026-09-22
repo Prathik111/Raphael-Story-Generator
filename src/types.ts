@@ -87,7 +87,7 @@ export interface Scene {
   positive_prompt: string;
   negative_prompt: string;
   selected_loras: SceneLoraSelection[];
-  image_status: 'not_ready' | 'prompt_ready' | 'queued' | 'running' | 'generated' | 'failed';
+  image_status: 'not_ready' | 'prompt_ready' | 'queued' | 'generated' | 'failed';
   image_url: string | null;
   image_path: string | null;
   image_mime: string | null;

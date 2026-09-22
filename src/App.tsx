@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, subscribeToComfy, subscribeToLlm, subscribeToPipeline } from './tauri';
-import type { AppSettings, AppState, Chapter, ComfyGenerationEvent, LlmGenerationEvent, PipelineEvent, RegistryCatalog, RegistryStatusDto, Scene, Story, StoryVisualSetup } from './types';
+import { api, subscribeToLlm, subscribeToPipeline } from './tauri';
+import type { AppSettings, AppState, Chapter, LlmGenerationEvent, PipelineEvent, RegistryCatalog, RegistryStatusDto, Scene, Story, StoryVisualSetup } from './types';
 
 function PulseMark() {
   return <div className="raphael-core" aria-label="Raphael"><span className="core-dot"/><i className="core-orbit orbit-a"/><i className="core-orbit orbit-b"/><i className="core-orbit orbit-c"/></div>;
@@ -9,7 +9,7 @@ function PulseMark() {
 function splitTags(values: string[]) { return values.filter(Boolean).slice(0, 12); }
 
 function formatDate(value: string) {
-  const unix = value.match(/^unix:(\d+)$/);
+  const unix = value.match(/^unix:(\\d+)$/);
   try {
     const date = unix ? new Date(Number(unix[1]) * 1000) : new Date(value);
     return Number.isNaN(date.getTime()) ? value : date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
@@ -179,7 +179,7 @@ function ResearchPanel({ story }: { story: Story }) {
   </section>;
 }
 
-function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPrompt, onViewPrompt, onQueueImage, buildingPrompt, queueing, progress, images }: { story: Story; chapter: Chapter; onExtractScenes: () => void; extracting: boolean; onBuildPrompt: (scene: Scene) => void; onViewPrompt: (scene: Scene) => void; onQueueImage: (scene: Scene) => void; buildingPrompt: string | null; queueing: string | null; progress: Record<string, ComfyGenerationEvent>; images: Record<string, string>; }) {
+function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPrompt, onViewPrompt, onQueueImage, buildingPrompt, queueing }: { story: Story; chapter: Chapter; onExtractScenes: () => void; extracting: boolean; onBuildPrompt: (scene: Scene) => void; onViewPrompt: (scene: Scene) => void; onQueueImage: (scene: Scene) => void; buildingPrompt: string | null; queueing: string | null; }) {
   return <div className="chapter-view">
     <div className="chapter-header hud-panel">
       <div><div className="eyebrow">CHAPTER {String(chapter.number).padStart(2, '0')}</div><h2>{chapter.title}</h2></div>
@@ -202,19 +202,7 @@ function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPromp
         <div className="scene-meta"><span>{scene.location || 'UNKNOWN LOCATION'}</span><span>{scene.time || 'TIME UNSPECIFIED'}</span></div>
         <p className="scene-action">{scene.action}</p>
         {scene.selected_loras.length ? <div className="scene-lora-strip">{scene.selected_loras.map(lora => <span className="scene-lora-chip" key={lora.id} title={lora.reason}>{lora.role === 'character' ? 'CHAR' : 'POSE'} · {lora.name}</span>)}</div> : null}
-        {images[scene.id] ? <img className="scene-image" src={images[scene.id]} alt={scene.description} /> : null}
-        {(() => {
-          const currentProgress = progress[scene.id];
-          if (!currentProgress || (currentProgress.status !== 'queued' && currentProgress.status !== 'running')) return null;
-          const percent = currentProgress.progress;
-          return <div className="scene-progress">
-            <div className="scene-progress-head"><span>{currentProgress.message}</span><b>{percent == null ? '—' : Math.round(percent) + '%'}</b></div>
-            <div className="scene-progress-track"><div className={'scene-progress-fill ' + (percent == null ? 'indeterminate' : '')} style={percent == null ? undefined : { width: Math.max(0, Math.min(100, percent)) + '%' }} /></div>
-            <small>{currentProgress.current_node ? 'NODE ' + currentProgress.current_node : currentProgress.queue_remaining != null ? 'QUEUE REMAINING ' + currentProgress.queue_remaining : 'COMFYUI EXECUTION'}</small>
-          </div>;
-        })()}
-        {scene.image_error ? <div className="scene-error">{scene.image_error}</div> : null}
-        <div className="scene-footer"><span className={'scene-status ' + scene.image_status}>{scene.image_status.replace('_', ' ').toUpperCase()}</span><div className="scene-actions"><button className="text-btn" onClick={() => scene.positive_prompt ? onViewPrompt(scene) : onBuildPrompt(scene)} disabled={buildingPrompt === scene.id || queueing === scene.id}>{buildingPrompt === scene.id ? 'BUILDING…' : scene.positive_prompt ? 'VIEW PROMPT' : 'BUILD IMAGE PROMPT'}</button>{scene.positive_prompt ? <button className="text-btn queue-btn" onClick={() => onQueueImage(scene)} disabled={queueing === scene.id}>{queueing === scene.id ? 'QUEUING…' : scene.image_status === 'queued' || scene.image_status === 'running' ? 'REQUEUE IMAGE' : 'QUEUE IMAGE'}</button> : null}</div></div>
+        <div className="scene-footer"><span className={`scene-status ${scene.image_status}`}>{scene.image_status.replace('_', ' ').toUpperCase()}</span><div className="scene-actions"><button className="text-btn" onClick={() => scene.positive_prompt ? onViewPrompt(scene) : onBuildPrompt(scene)} disabled={buildingPrompt === scene.id || queueing === scene.id}>{buildingPrompt === scene.id ? 'BUILDING…' : scene.positive_prompt ? 'VIEW PROMPT' : 'BUILD IMAGE PROMPT'}</button>{scene.positive_prompt ? <button className="text-btn queue-btn" onClick={() => onQueueImage(scene)} disabled={queueing === scene.id}>{queueing === scene.id ? 'QUEUING…' : scene.image_status === 'queued' ? 'REQUEUE IMAGE' : 'QUEUE IMAGE'}</button> : null}</div></div>
       </article>)}</div>}
     </section>
   </div>;
@@ -285,7 +273,7 @@ function GenerationMonitor({
   </section>;
 }
 
-function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey, onClose, onError }: { settings: AppSettings; llmApiKeyConfigured: boolean; onSave: (settings: AppSettings) => Promise<void>; onClearApiKey: () => Promise<void>; onClose: () => void; onError: (message: string) => void }) {
+function SettingsOverlay({ settings, onSave, onClose, onError }: { settings: AppSettings; onSave: (settings: AppSettings) => Promise<void>; onClose: () => void; onError: (message: string) => void }) {
   const [draft, setDraft] = useState(settings);
   const [busy, setBusy] = useState(false);
   const [researchTesting, setResearchTesting] = useState(false);
@@ -321,7 +309,7 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
       <div className="section-head">OPENAI-COMPATIBLE LLM</div>
       <label>Base URL<input value={draft.llm_base_url} onChange={e => setDraft({ ...draft, llm_base_url: e.target.value })} placeholder="http://127.0.0.1:11434/v1"/></label>
       <label>Model<input value={draft.llm_model} onChange={e => setDraft({ ...draft, llm_model: e.target.value })} placeholder="qwen3:8b"/></label>
-      <label>API key<input type="password" value={draft.llm_api_key} onChange={e => setDraft({ ...draft, llm_api_key: e.target.value })} placeholder={llmApiKeyConfigured ? 'Stored securely · leave blank to keep current key' : 'Optional for local endpoints'}/>{llmApiKeyConfigured ? <button type="button" className="text-btn settings-clear-key" onClick={() => void onClearApiKey()}>CLEAR STORED KEY</button> : null}</label>
+      <label>API key<input type="password" value={draft.llm_api_key} onChange={e => setDraft({ ...draft, llm_api_key: e.target.value })} placeholder="Optional for local endpoints"/></label>
       <label>Temperature<input type="number" min="0" max="2" step="0.1" value={draft.temperature} onChange={e => setDraft({ ...draft, temperature: Number(e.target.value) || 0 })}/></label>
       <div className="section-head setting-gap">SYSTEM PROMPTS · FULLY CUSTOMIZABLE</div>
       <small className="settings-hint">These prompts are sent as the system message for each LLM generation stage. They are persisted with the application settings and shown live in the Generation Trace.</small>
@@ -364,9 +352,6 @@ export default function App() {
   const [styleLoraIds, setStyleLoraIds] = useState<string[]>([]);
   const [generationTraces, setGenerationTraces] = useState<GenerationTrace[]>([]);
   const [pipelineTrace, setPipelineTrace] = useState<PipelineEvent[]>([]);
-  const [comfyProgress, setComfyProgress] = useState<Record<string, ComfyGenerationEvent>>({});
-  const [sceneImages, setSceneImages] = useState<Record<string, string>>({});
-  const [selectedChapterNumber, setSelectedChapterNumber] = useState<number | null>(null);
 
   const loadState = async () => {
     const next = await api.getState();
@@ -378,11 +363,7 @@ export default function App() {
     try {
       setDirective('');
       setPromptPreview(null);
-      setSceneImages({});
-      setComfyProgress({});
-      const next = await api.getStory(id);
-      setStory(next);
-      setSelectedChapterNumber(next.chapters[next.chapters.length - 1]?.number ?? null);
+      setStory(await api.getStory(id));
     } catch (e) {
       setError(String(e));
     }
@@ -391,7 +372,6 @@ export default function App() {
     let disposed = false;
     let unlistenLlm: (() => void) | null = null;
     let unlistenPipeline: (() => void) | null = null;
-    let unlistenComfy: (() => void) | null = null;
 
     void subscribeToLlm(event => {
       if (disposed) return;
@@ -436,33 +416,10 @@ export default function App() {
       else unlistenPipeline = unlisten;
     });
 
-    void subscribeToComfy(event => {
-      if (disposed) return;
-      setComfyProgress(current => ({ ...current, [event.scene_id]: event }));
-      if (event.status === 'completed' || event.status === 'failed') {
-        void api.getStory(event.story_id).then(next => {
-          if (disposed) return;
-          setStory(current => current?.id === next.id ? next : current);
-        }).catch(() => {});
-      }
-      if (event.status === 'completed') {
-        void api.getSceneImage(event.story_id, event.chapter_number, event.scene_id)
-          .then(image => {
-            if (disposed || !image) return;
-            setSceneImages(current => ({ ...current, [event.scene_id]: image }));
-          })
-          .catch(() => {});
-      }
-    }).then(unlisten => {
-      if (disposed) unlisten();
-      else unlistenComfy = unlisten;
-    });
-
     return () => {
       disposed = true;
       unlistenLlm?.();
       unlistenPipeline?.();
-      unlistenComfy?.();
     };
   }, []);
 
@@ -503,23 +460,6 @@ export default function App() {
       window.clearInterval(timer);
     };
   }, []);
-
-
-  useEffect(() => {
-    if (!story || selectedChapterNumber == null) return;
-    const chapter = story.chapters.find(item => item.number === selectedChapterNumber);
-    if (!chapter) return;
-    let disposed = false;
-    void Promise.all(chapter.scenes.filter(scene => scene.image_status === 'generated').map(async scene => {
-      try {
-        const image = await api.getSceneImage(story.id, chapter.number, scene.id);
-        if (!disposed && image) setSceneImages(current => ({ ...current, [scene.id]: image }));
-      } catch {
-        // A deleted image should not prevent the chapter from loading.
-      }
-    }));
-    return () => { disposed = true; };
-  }, [story?.id, selectedChapterNumber]);
 
   useEffect(() => {
     if (registryStatus.status !== 'on') {
@@ -564,13 +504,10 @@ export default function App() {
     try {
       const visualSetup: StoryVisualSetup = { checkpoint_id: checkpointId, style_lora_ids: styleLoraIds.slice(0, 2) };
       const next = await api.createStory(prompt.trim(), visualSetup);
-      setStory(next);
-      setSelectedChapterNumber(next.chapters[next.chapters.length - 1]?.number ?? null);
-      setPrompt('');
-      await loadState();
+      setStory(next); setPrompt(''); await loadState();
     } catch (e) { setError(String(e)); } finally { setBusy(false); }
   };
-  const generateNext = async () => { if (!story || busy) return; setBusy(true); setError(null); try { const next = await api.generateNextChapter(story.id, directive.trim()); setStory(next); setSelectedChapterNumber(next.chapters[next.chapters.length - 1]?.number ?? null); setDirective(''); await loadState(); } catch (e) { setError(String(e)); } finally { setBusy(false); } };
+  const generateNext = async () => { if (!story || busy) return; setBusy(true); setError(null); try { const next = await api.generateNextChapter(story.id, directive.trim()); setStory(next); setDirective(''); await loadState(); } catch (e) { setError(String(e)); } finally { setBusy(false); } };
   const extractScenes = async (chapter: Chapter) => {
     if (!story || extracting) return;
     if (chapter.scenes.length > 0 && !window.confirm('Rebuild scenes? Existing scene prompts, queue IDs, and image state for this chapter will be replaced.')) {
@@ -592,9 +529,7 @@ export default function App() {
   const viewPrompt = (scene: Scene) => setPromptPreview(scene);
   const queueImage = async (scene: Scene) => { if (!story || queueing) return; const chapter = story.chapters.find(c => c.scenes.some(s => s.id === scene.id)); if (!chapter) return; setQueueing(scene.id); setError(null); try { setStory(await api.queueSceneImage(story.id, chapter.number, scene.id)); await loadState(); } catch (e) { setError(String(e)); } finally { setQueueing(null); } };
 
-  const currentChapter = story
-    ? story.chapters.find(chapter => chapter.number === selectedChapterNumber) || story.chapters[story.chapters.length - 1] || null
-    : null;
+  const currentChapter = story?.chapters[story.chapters.length - 1] || null;
   const totalScenes = useMemo(() => story?.chapters.reduce((n, c) => n + c.scenes.length, 0) || 0, [story]);
 
   if (!state) return (
@@ -638,11 +573,11 @@ export default function App() {
         {error ? <div className="error-box">{error}</div> : null}
         {!story ? <NewStoryPanel busy={busy} prompt={prompt} setPrompt={setPrompt} onGenerate={() => void generateStory()} registryStatus={registryStatus} catalog={registryCatalog} checkpointId={checkpointId} setCheckpointId={setCheckpointId} styleLoraIds={styleLoraIds} setStyleLoraIds={setStyleLoraIds}/> : <>
           <section className="story-header hud-panel">
-            <div><div className="eyebrow">STORY BIBLE · {story.id.slice(0, 8).toUpperCase()}</div><h1>{story.title}</h1><p>{story.bible.premise}</p><label className="chapter-selector">VIEW CHAPTER<select value={selectedChapterNumber ?? story.chapters[story.chapters.length - 1]?.number ?? 1} onChange={e => setSelectedChapterNumber(Number(e.target.value))}>{story.chapters.map(chapter => <option key={chapter.number} value={chapter.number}>CHAPTER {chapter.number} · {chapter.title}</option>)}</select></label></div>
+            <div><div className="eyebrow">STORY BIBLE · {story.id.slice(0, 8).toUpperCase()}</div><h1>{story.title}</h1><p>{story.bible.premise}</p></div>
             <div className="story-header-tags"><TagRow values={story.metadata.tone} tone="tone"/></div>
           </section>
           <IntroductionView story={story}/>
-          {currentChapter ? <ChapterView story={story} chapter={currentChapter} onExtractScenes={() => void extractScenes(currentChapter)} extracting={extracting} onBuildPrompt={scene => void buildPrompt(scene)} onViewPrompt={viewPrompt} onQueueImage={queueImage} buildingPrompt={buildingPrompt} queueing={queueing} progress={comfyProgress} images={sceneImages}/> : null}
+          {currentChapter ? <ChapterView story={story} chapter={currentChapter} onExtractScenes={() => void extractScenes(currentChapter)} extracting={extracting} onBuildPrompt={scene => void buildPrompt(scene)} onViewPrompt={viewPrompt} onQueueImage={queueImage} buildingPrompt={buildingPrompt} queueing={queueing}/> : null}
           <section className="hud-panel continuation-panel">
             <div className="section-head">CONTINUE THE STORY</div>
             <h2>Chapter {story.chapters.length + 1}</h2>
@@ -668,20 +603,9 @@ export default function App() {
     {promptPreview ? <div className="overlay" onMouseDown={() => setPromptPreview(null)}><section className="prompt-viewer hud-panel" onMouseDown={e => e.stopPropagation()}><header className="settings-header"><div><div className="eyebrow">IMAGE BUILDER</div><h2>SCENE {String(promptPreview.order).padStart(2, '0')} PROMPTS</h2></div><button className="settings-close" onClick={() => setPromptPreview(null)}>×</button></header><div className="prompt-viewer-body"><div><div className="section-head">POSITIVE PROMPT</div><pre className="prompt-box">{promptPreview.positive_prompt}</pre></div><div><div className="section-head">NEGATIVE PROMPT</div><pre className="prompt-box">{promptPreview.negative_prompt}</pre></div></div></section></div> : null}
     {settingsOpen ? <SettingsOverlay
       settings={state.settings}
-      llmApiKeyConfigured={state.llm_api_key_configured}
       onSave={async value => {
-        const suppliedKey = Boolean(value.llm_api_key.trim());
         const next = await api.saveSettings(value);
-        setState(prev => prev ? {
-          ...prev,
-          settings: next,
-          llm_configured: Boolean(next.llm_base_url && next.llm_model),
-          llm_api_key_configured: suppliedKey || prev.llm_api_key_configured,
-        } : prev);
-      }}
-      onClearApiKey={async () => {
-        await api.clearLlmApiKey();
-        setState(prev => prev ? { ...prev, llm_api_key_configured: false, settings: { ...prev.settings, llm_api_key: '' } } : prev);
+        setState(prev => prev ? { ...prev, settings: next, llm_configured: Boolean(next.llm_base_url && next.llm_model) } : prev);
       }}
       onError={message => setError(message)}
       onClose={() => setSettingsOpen(false)}
