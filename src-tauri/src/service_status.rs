@@ -7,6 +7,7 @@ pub enum ServiceHealthStatus {
     Online,
     Offline,
     Disabled,
+    Checking,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -30,7 +31,7 @@ pub async fn probe(registry: &RegistryState, settings: &AppSettings) -> ServiceS
         service: "registry".into(),
         status: match registry_status.status {
             crate::registry::RegistryStatus::On => ServiceHealthStatus::Online,
-            crate::registry::RegistryStatus::Starting => ServiceHealthStatus::Offline,
+            crate::registry::RegistryStatus::Starting => ServiceHealthStatus::Checking,
             crate::registry::RegistryStatus::Off => ServiceHealthStatus::Offline,
         },
         url: registry_status.url,
