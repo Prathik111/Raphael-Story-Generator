@@ -35,6 +35,18 @@ The engine uses an OpenAI-compatible `/chat/completions` endpoint so it can poin
 - Model: `qwen3:8b`
 - API key: optional
 
+Every LLM generation requests streaming when supported by the provider. The Tauri backend emits token/delta events to the frontend, where the Live Generation Trace shows the exact system prompt, exact user prompt, model, live response, completion state and errors for every generation stage.
+
+The Engine Settings panel exposes a separate editable system prompt for each stage:
+
+- Story Architect
+- Continuity Writer
+- Scene Director
+- LoRA Selector
+- Image Prompt Generator
+
+These prompts are persisted with the local application settings.
+
 ## Development
 
 Install dependencies:
