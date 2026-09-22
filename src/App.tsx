@@ -330,15 +330,18 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
   const [busy, setBusy] = useState(false);
   const [researchTesting, setResearchTesting] = useState(false);
   const [researchTestResult, setResearchTestResult] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const save = async () => {
     setBusy(true);
+    setSaveError(null);
     try {
       await onSave(draft);
       onClose();
     } catch (error) {
-      onError(String(error));
-      onClose();
+      const message = toErrorMessage(error);
+      setSaveError(message);
+      onError(message);
     } finally {
       setBusy(false);
     }
@@ -388,6 +391,7 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
       <label>API URL<input value={draft.comfyui_url} onChange={e => setDraft({ ...draft, comfyui_url: e.target.value })} placeholder="http://127.0.0.1:8188"/></label>
       <label>API workflow template<small className="settings-hint">Use POSITIVE_PROMPT, NEGATIVE_PROMPT, SEED, STORY_ID, SCENE_ID and CHECKPOINT placeholders. The workflow must contain a CheckpointLoaderSimple or CheckpointLoader node. Raphael's workflow-builder tool inserts one LoraLoader node per selected LoRA and chains MODEL + CLIP through the full stack automatically.</small><textarea className="workflow-input" value={draft.comfyui_workflow_json} onChange={e => setDraft({ ...draft, comfyui_workflow_json: e.target.value })} placeholder='Paste a ComfyUI API workflow JSON template here...'/></label>
     </div>
+    {saveError ? <div className="settings-inline-error error-box">{saveError}</div> : null}
     <footer className="settings-footer"><button className="secondary-btn" onClick={onClose}>CANCEL</button><button className="primary-btn" onClick={() => void save()} disabled={busy}>{busy ? 'SAVING…' : 'SAVE SETTINGS'}</button></footer>
   </section></div>;
 }
