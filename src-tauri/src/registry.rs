@@ -55,9 +55,12 @@ pub struct RegistryModelArtifact {
 pub struct RegistryLoraCandidate {
     pub id: String,
     pub name: String,
+    pub model_type: String,
     pub description: Option<String>,
     pub base_model: Option<String>,
     pub creator: Option<String>,
+    pub tags: Vec<String>,
+    pub activation_prompts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -288,13 +291,33 @@ impl RegistryState {
             .await
             .map_err(|error| AppError::Registry(format!("failed to load compatible LoRAs: {error}")))?;
 
-        Ok(models.into_iter().map(|model| RegistryLoraCandidate {
-            id: model.id,
-            name: model.name,
-            description: model.description,
-            base_model: model.base_model,
-            creator: model.creator,
-        }).collect())
+        let mut candidates = Vec::with_capacity(models.len());
+        for model in models {
+            let tags = client.tags(&model.id)
+                .await
+                .map_err(|error| AppError::Registry(format!("failed to load tags for {}: {error}", model.name)))?;
+            let activation_prompts = client
+                .versions(&model.id)
+                .await
+                .map_err(|error| AppError::Registry(format!("failed to load versions for {}: {error}", model.name)))?
+                .into_iter()
+                .max_by_key(|version| version.updated_at)
+                .map(|version| version.activation_prompts)
+                .unwrap_or_default();
+
+            candidates.push(RegistryLoraCandidate {
+                id: model.id,
+                name: model.name,
+                model_type: model.model_type.to_string(),
+                description: model.description.map(|value| value.chars().take(600).collect()),
+                base_model: model.base_model,
+                creator: model.creator,
+                tags,
+                activation_prompts,
+            });
+        }
+
+        Ok(candidates)
     }
 
     pub async fn model_artifact(&self, model_id: &str) -> AppResult<RegistryModelArtifact> {
