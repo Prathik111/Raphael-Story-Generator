@@ -210,7 +210,7 @@ pub async fn ensure_started_with_settings(app: &AppHandle, settings: &crate::App
 
     set_last_error(None);
 
-    let result = async {
+    let result: AppResult<()> = async {
         let runtime = install_runtime_files(app)?;
         docker_compose_up(&runtime).await?;
 
