@@ -9,7 +9,7 @@
     "build": "tsc && vite build",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:icons": "tauri icon src-tauri/app-icon.svg",
+    "tauri:icons": "node scripts/ensure-windows-icon.mjs",
     "tauri:build": "npm run tauri:icons && tauri build",
     "lint": "tsc --noEmit"
   },
