@@ -668,7 +668,7 @@ pub async fn research_web(
 
     emit_pipeline(
         app,
-        "web_research",
+        "web_fetch",
         "completed",
         format!("Fetched {} readable source page(s)", sources.len()),
     );
@@ -691,14 +691,24 @@ pub async fn research_web(
         "RESEARCH QUERY:\n{query}\n\nSOURCE MATERIAL:\n{context}\n\nExtract only facts that are directly supported by the source material.\nFor every fact, source_ids MUST contain existing IDs such as S1 or S2.\nFor every fact, evidence MUST be copied verbatim from one source page, using 8-40 words from that page.\nDo not paraphrase the evidence field.\nIf the sources do not support a useful fact, return an empty facts array instead of guessing.\nReturn:\n{schema}"
     );
 
-    let raw = chat(app, settings, "web_research", system, &user).await?;
-    let parsed: ExtractedResearch = serde_json::from_str(crate::clean_json(&raw))
-        .map_err(|error| {
-            AppError::ModelResponse(format!(
+    let raw = match chat(app, settings, "web_research", system, &user).await {
+        Ok(raw) => raw,
+        Err(error) => {
+            emit_pipeline(app, "web_research_extractor", "error", error.to_string());
+            return Err(error);
+        }
+    };
+    let parsed: ExtractedResearch = match serde_json::from_str(crate::clean_json(&raw)) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            let error = AppError::ModelResponse(format!(
                 "web research extractor returned invalid JSON: {error}; output starts with: {}",
                 raw.chars().take(300).collect::<String>()
-            ))
-        })?;
+            ));
+            emit_pipeline(app, "web_research_extractor", "error", error.to_string());
+            return Err(error);
+        }
+    };
 
     let valid_ids = sources
         .iter()
