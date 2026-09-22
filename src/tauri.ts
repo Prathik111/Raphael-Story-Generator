@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { AppSettings, AppState, SceneExtractionResult, Story } from './types';
+import type { AppSettings, AppState, RegistryCatalog, RegistryStatusDto, SceneExtractionResult, Story } from './types';
 
 export const isWebApp = typeof window !== 'undefined' && !(window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 
@@ -27,4 +27,7 @@ export const api = {
     command<Story>('queue_scene_image', { storyId, chapterNumber, sceneId }),
   saveSettings: (settings: AppSettings) => command<AppSettings>('save_settings', { settings }),
   getSettings: () => command<AppSettings>('get_settings'),
+  ensureRegistry: () => command<RegistryStatusDto>('ensure_registry'),
+  getRegistryStatus: () => command<RegistryStatusDto>('get_registry_status'),
+  getRegistryModels: () => command<RegistryCatalog>('get_registry_models'),
 };
