@@ -137,26 +137,70 @@ fn install_runtime_files(app: &AppHandle) -> AppResult<PathBuf> {
     Ok(target)
 }
 
+fn docker_daemon_error(output: &std::process::Output) -> Option<String> {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let details = if stderr.is_empty() { stdout } else { stderr };
+
+    let lower = details.to_ascii_lowercase();
+    if lower.contains("dockerdesktoplinuxengine")
+        || lower.contains("cannot connect to the docker daemon")
+        || lower.contains("is the docker daemon running")
+        || lower.contains("the system cannot find the file specified")
+    {
+        Some(
+            "Docker Desktop is installed but its Linux engine is not running. Start Docker Desktop, wait until the engine is ready, then retry private web research."
+                .into(),
+        )
+    } else {
+        None
+    }
+}
+
 async fn docker_compose_up(dir: &Path) -> AppResult<()> {
     let dir = dir.to_path_buf();
 
     tokio::task::spawn_blocking(move || {
         let output = Command::new("docker")
+            .args(["info"])
+            .output()
+            .map_err(|error| {
+                format!("Docker CLI is unavailable. Install Docker Desktop and ensure the 'docker' command is on PATH: {error}")
+            })?;
+
+        if !output.status.success() {
+            return Err(
+                docker_daemon_error(&output).unwrap_or_else(|| {
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    format!(
+                        "Docker daemon is unavailable: {}",
+                        if stderr.is_empty() { stdout } else { stderr }
+                    )
+                }),
+            );
+        }
+
+        let output = Command::new("docker")
             .args(["compose", "--project-name", PROJECT_NAME, "up", "-d", "--build"])
             .current_dir(&dir)
             .output()
-            .map_err(|error| format!("Docker is not available: {error}"))?;
+            .map_err(|error| format!("Docker Compose is unavailable: {error}"))?;
 
         if output.status.success() {
             Ok(())
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            Err(format!(
-                "Docker Compose failed ({}): {}",
-                output.status,
-                if stderr.is_empty() { stdout } else { stderr }
-            ))
+            Err(
+                docker_daemon_error(&output).unwrap_or_else(|| {
+                    format!(
+                        "Docker Compose failed ({}): {}",
+                        output.status,
+                        if stderr.is_empty() { stdout } else { stderr }
+                    )
+                }),
+            )
         }
     })
     .await
