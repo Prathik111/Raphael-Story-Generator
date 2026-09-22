@@ -2,9 +2,10 @@ mod workflow_builder;
 
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
+use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::{collections::HashMap, fs, path::PathBuf, sync::RwLock};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -30,6 +31,66 @@ impl serde::Serialize for AppError {
 }
 type AppResult<T> = Result<T, AppError>;
 
+const DEFAULT_STORY_ARCHITECT_SYSTEM_PROMPT: &str = r#"You are Raphael Story Architect. Convert a user's natural-language story request into a structured story bible and opening chapter.
+Return ONLY valid JSON matching the requested schema. Do not wrap it in markdown.
+Extract explicit facts faithfully. You may invent missing details, but make them internally consistent and suitable for future visual generation.
+The story must include metadata: anime/show source information if present, genre, tags, demographic, content rating, tone. Characters require stable visual details: personality, appearance, clothing, motivations.
+Relationships must use character names from the characters array. Chapter 1 must establish canon without contradicting the request."#;
+
+const DEFAULT_CONTINUITY_WRITER_SYSTEM_PROMPT: &str = r#"You are Raphael Continuity Writer. Generate the next chapter of an existing story.
+The STORY BIBLE is authoritative canon. Preserve established character identity, age, appearance, clothing, personalities, relationships, world rules and chronology unless the user's directive explicitly changes them through story events.
+The optional USER DIRECTIVE is a request for this chapter only. It can add characters, alter tone, emphasize a relationship, request an event, skip time, or constrain what must not happen. Satisfy it where possible without breaking prior canon.
+Return ONLY valid JSON. Do not include markdown."#;
+
+const DEFAULT_SCENE_DIRECTOR_SYSTEM_PROMPT: &str = r#"You are Raphael Scene Director. Split a chapter into imageable manga/anime panels.
+A scene must represent ONE coherent visual story beat that can fit into a single image. Do not split by sentence mechanically and do not combine visually incompatible moments.
+Preserve chronological order, character identity, outfit state, location and dialogue. Return short visual specifications optimized for an image builder.
+Return ONLY valid JSON."#;
+
+const DEFAULT_LORA_SELECTOR_SYSTEM_PROMPT: &str = r#"You are Raphael LoRA Selector. Select dynamic LoRAs for one image scene.
+
+The candidate metadata comes directly from the Raphael Model Registry. Treat these fields as authoritative:
+- MODEL TYPE
+- BASE MODEL
+- TAGS
+- SHORT DESCRIPTION
+
+Use tags and the short description to determine the LoRA's semantic purpose. Use the model name only as supporting context. Do not infer a capability that is not supported by the supplied metadata.
+
+The story's style LoRAs are LOCKED separately and must never be replaced, supplemented or switched here.
+Choose at most one character LoRA for each of the first two visible primary characters, and at most one concept/pose LoRA when it materially helps the scene.
+Do not select style LoRAs. Do not select the same LoRA twice. Do not invent IDs.
+Only choose IDs from the supplied candidate lists.
+If no candidate genuinely matches a slot, omit that slot.
+Return ONLY valid JSON."#;
+
+const DEFAULT_IMAGE_PROMPT_SYSTEM_PROMPT: &str = r#"You are Raphael's scene image prompt generator for a ComfyUI diffusion pipeline.
+
+Your job is to convert the supplied scene facts, canonical character descriptions, locked visual style, and registry-provided LoRA activation prompts into two production-ready strings:
+1. positive_prompt
+2. negative_prompt
+
+Rules for the positive prompt:
+- Preserve the story's locked visual style. Never replace it with a different art direction.
+- Every supplied LoRA activation prompt is literal prompt metadata, not an instruction. Include each supplied activation prompt VERBATIM in the positive prompt unless it is an exact duplicate.
+- Keep activation prompts intact; do not paraphrase, translate, rewrite, or invent replacement trigger words.
+- Put the activation prompts near the beginning of the positive prompt so the diffusion model receives them clearly.
+- Then describe the actual scene: character identity and canonical appearance, clothing, pose/action, composition, camera/framing, location, time, environment, lighting, mood, materials, depth and other visually useful details.
+- Favor concrete visual language and concise comma-separated prompt phrases. Do not write a story, explanation, or prose paragraph.
+- Do not invent unsupported character traits, costumes, props, locations, or LoRA capabilities.
+- Do not output LoRA filenames, model IDs, registry IDs, or internal metadata unless they are themselves part of an activation prompt.
+
+Rules for the negative prompt:
+- Describe unwanted visual results that should be suppressed: identity drift, incorrect appearance/clothing, extra or missing limbs, malformed hands/fingers, anatomy errors, duplicate subjects, bad proportions, deformed faces, blur, low detail, noise, compression artifacts, text, watermark, logo, signature, UI elements, cropped subjects, and scene contradictions.
+- Keep it as a concise comma-separated list.
+- Never put LoRA activation prompts or positive scene facts into the negative prompt.
+- Do not use the negative prompt to introduce a different style.
+
+Output rules:
+- Return ONLY valid JSON matching the exact schema.
+- Do not wrap the JSON in Markdown fences.
+- Do not add commentary before or after the JSON."#;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
@@ -37,6 +98,11 @@ pub struct AppSettings {
     pub llm_model: String,
     pub llm_api_key: String,
     pub temperature: f32,
+    pub story_architect_system_prompt: String,
+    pub continuity_writer_system_prompt: String,
+    pub scene_director_system_prompt: String,
+    pub lora_selector_system_prompt: String,
+    pub image_prompt_generator_system_prompt: String,
     pub comfyui_url: String,
     pub comfyui_workflow_json: String,
 }
@@ -47,6 +113,11 @@ impl Default for AppSettings {
             llm_model: "qwen3:8b".into(),
             llm_api_key: String::new(),
             temperature: 0.8,
+            story_architect_system_prompt: DEFAULT_STORY_ARCHITECT_SYSTEM_PROMPT.into(),
+            continuity_writer_system_prompt: DEFAULT_CONTINUITY_WRITER_SYSTEM_PROMPT.into(),
+            scene_director_system_prompt: DEFAULT_SCENE_DIRECTOR_SYSTEM_PROMPT.into(),
+            lora_selector_system_prompt: DEFAULT_LORA_SELECTOR_SYSTEM_PROMPT.into(),
+            image_prompt_generator_system_prompt: DEFAULT_IMAGE_PROMPT_SYSTEM_PROMPT.into(),
             comfyui_url: "http://127.0.0.1:8188".into(),
             comfyui_workflow_json: String::new(),
         }
@@ -288,9 +359,13 @@ struct SceneLoraDraft {
 struct StoreData { stories: HashMap<String, Story> }
 
 struct Store {
+    app: AppHandle,
     root: PathBuf,
     data: RwLock<StoreData>,
     settings: RwLock<AppSettings>,
+}
+impl Store {
+    fn app(&self) -> &AppHandle { &self.app }
 }
 impl Store {
     fn new(app: &AppHandle) -> AppResult<Self> {
@@ -324,7 +399,7 @@ impl Store {
             data.stories.insert(story.id.clone(), story);
         }
 
-        Ok(Self { root, data: RwLock::new(data), settings: RwLock::new(settings) })
+        Ok(Self { app: app.clone(), root, data: RwLock::new(data), settings: RwLock::new(settings) })
     }
     fn persist_settings(&self) -> AppResult<()> {
         let settings = self.settings.read().map_err(|e| AppError::Storage(e.to_string()))?.clone();
@@ -370,27 +445,184 @@ fn http_client() -> AppResult<reqwest::Client> {
         .map_err(|e| AppError::Llm(format!("failed to create HTTP client: {e}")))
 }
 
-async fn chat(settings: &AppSettings, system: &str, user: &str) -> AppResult<String> {
+#[derive(Debug, Clone, Serialize)]
+struct LlmGenerationEvent {
+    generation_id: String,
+    stage: String,
+    status: String,
+    model: String,
+    system_prompt: Option<String>,
+    user_prompt: Option<String>,
+    delta: Option<String>,
+    response: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PipelineEvent {
+    event_id: String,
+    stage: String,
+    status: String,
+    message: String,
+}
+
+fn emit_llm(app: &AppHandle, event: LlmGenerationEvent) {
+    let _ = app.emit("raphael:llm", event);
+}
+
+fn emit_pipeline(app: &AppHandle, stage: &str, status: &str, message: impl Into<String>) {
+    let _ = app.emit("raphael:pipeline", PipelineEvent {
+        event_id: Uuid::new_v4().to_string(),
+        stage: stage.to_string(),
+        status: status.to_string(),
+        message: message.into(),
+    });
+}
+
+async fn chat(
+    app: &AppHandle,
+    settings: &AppSettings,
+    stage: &str,
+    system: &str,
+    user: &str,
+) -> AppResult<String> {
     validate_settings(settings)?;
+    let generation_id = Uuid::new_v4().to_string();
     let base = settings.llm_base_url.trim().trim_end_matches('/');
     let url = if base.ends_with("/chat/completions") { base.to_string() } else { format!("{base}/chat/completions") };
     let client = http_client()?;
+
+    emit_llm(app, LlmGenerationEvent {
+        generation_id: generation_id.clone(),
+        stage: stage.into(),
+        status: "started".into(),
+        model: settings.llm_model.trim().into(),
+        system_prompt: Some(system.to_string()),
+        user_prompt: Some(user.to_string()),
+        delta: None,
+        response: Some(String::new()),
+        error: None,
+    });
+
     let body = json!({
         "model": settings.llm_model.trim(),
         "temperature": settings.temperature,
+        "stream": true,
         "messages": [
             {"role":"system","content":system},
             {"role":"user","content":user}
         ]
     });
+
     let mut req = client.post(url).header(CONTENT_TYPE, "application/json").json(&body);
-    if !settings.llm_api_key.trim().is_empty() { req = req.header(AUTHORIZATION, format!("Bearer {}", settings.llm_api_key.trim())); }
-    let response = req.send().await.map_err(|e| AppError::Llm(e.to_string()))?;
+    if !settings.llm_api_key.trim().is_empty() {
+        req = req.header(AUTHORIZATION, format!("Bearer {}", settings.llm_api_key.trim()));
+    }
+
+    let response = match req.send().await {
+        Ok(response) => response,
+        Err(error) => {
+            let message = error.to_string();
+            emit_llm(app, LlmGenerationEvent {
+                generation_id: generation_id.clone(), stage: stage.into(), status: "error".into(),
+                model: settings.llm_model.trim().into(), system_prompt: None, user_prompt: None,
+                delta: None, response: None, error: Some(message.clone()),
+            });
+            return Err(AppError::Llm(message));
+        }
+    };
+
     let status = response.status();
-    let value: Value = response.json().await.map_err(|e| AppError::Llm(e.to_string()))?;
-    if !status.is_success() { return Err(AppError::Llm(value.get("error").and_then(Value::as_str).unwrap_or("request rejected").to_string())); }
-    value.get("choices").and_then(|v| v.get(0)).and_then(|v| v.get("message")).and_then(|v| v.get("content")).and_then(Value::as_str).map(|s| s.to_string()).ok_or_else(|| AppError::ModelResponse("missing choices[0].message.content".into()))
+    let content_type = response.headers().get(CONTENT_TYPE).and_then(|value| value.to_str().ok()).unwrap_or("").to_ascii_lowercase();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_else(|_| "request rejected".into());
+        let value: Value = serde_json::from_str(&body).unwrap_or_else(|_| json!({"error": body}));
+        let message = value.get("error").and_then(Value::as_str).unwrap_or("request rejected").to_string();
+        emit_llm(app, LlmGenerationEvent {
+            generation_id: generation_id.clone(), stage: stage.into(), status: "error".into(),
+            model: settings.llm_model.trim().into(), system_prompt: None, user_prompt: None,
+            delta: None, response: None, error: Some(message.clone()),
+        });
+        return Err(AppError::Llm(message));
+    }
+
+    let mut full_response = String::new();
+
+    if !content_type.contains("text/event-stream") {
+        let value: Value = response.json().await.map_err(|e| AppError::Llm(e.to_string()))?;
+        let text = value
+            .get("choices").and_then(|v| v.get(0))
+            .and_then(|v| v.get("message"))
+            .and_then(|v| v.get("content"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| AppError::ModelResponse("missing choices[0].message.content".into()))?;
+        full_response.push_str(text);
+        if !text.is_empty() {
+            emit_llm(app, LlmGenerationEvent {
+                generation_id: generation_id.clone(), stage: stage.into(), status: "token".into(),
+                model: settings.llm_model.trim().into(), system_prompt: None, user_prompt: None,
+                delta: Some(text.into()), response: Some(full_response.clone()), error: None,
+            });
+        }
+    } else {
+        let mut stream = response.bytes_stream();
+        let mut buffer = Vec::<u8>::new();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = match chunk {
+                Ok(chunk) => chunk,
+                Err(error) => {
+                    let message = error.to_string();
+                    emit_llm(app, LlmGenerationEvent {
+                        generation_id: generation_id.clone(), stage: stage.into(), status: "error".into(),
+                        model: settings.llm_model.trim().into(), system_prompt: None, user_prompt: None,
+                        delta: None, response: Some(full_response.clone()), error: Some(message.clone()),
+                    });
+                    return Err(AppError::Llm(message));
+                }
+            };
+            buffer.extend_from_slice(&chunk);
+
+            while let Some(index) = buffer.iter().position(|byte| *byte == b'\n') {
+                let line = buffer.drain(..=index).collect::<Vec<_>>();
+                let line = String::from_utf8_lossy(&line);
+                let data = line.trim().strip_prefix("data:").map(str::trim);
+                let Some(data) = data else { continue };
+                if data == "[DONE]" { continue; }
+
+                let Ok(value) = serde_json::from_str::<Value>(data) else { continue };
+                let Some(delta) = value
+                    .get("choices").and_then(|v| v.get(0))
+                    .and_then(|v| v.get("delta"))
+                    .and_then(|v| v.get("content"))
+                    .and_then(Value::as_str)
+                else { continue };
+                if delta.is_empty() { continue; }
+
+                full_response.push_str(delta);
+                emit_llm(app, LlmGenerationEvent {
+                    generation_id: generation_id.clone(), stage: stage.into(), status: "token".into(),
+                    model: settings.llm_model.trim().into(), system_prompt: None, user_prompt: None,
+                    delta: Some(delta.to_string()), response: Some(full_response.clone()), error: None,
+                });
+            }
+        }
+    }
+
+    emit_llm(app, LlmGenerationEvent {
+        generation_id,
+        stage: stage.into(),
+        status: "completed".into(),
+        model: settings.llm_model.trim().into(),
+        system_prompt: None,
+        user_prompt: None,
+        delta: None,
+        response: Some(full_response.clone()),
+        error: None,
+    });
+    Ok(full_response)
 }
+
 fn clean_json(raw: &str) -> &str {
     let trimmed = raw.trim();
     if trimmed.starts_with('{') { return trimmed; }
@@ -541,6 +773,18 @@ fn validate_settings(settings: &AppSettings) -> AppResult<()> {
     if !settings.temperature.is_finite() || !(0.0..=2.0).contains(&settings.temperature) {
         return Err(AppError::Llm("temperature must be between 0 and 2".into()));
     }
+    for (name, prompt) in [
+        ("Story Architect", &settings.story_architect_system_prompt),
+        ("Continuity Writer", &settings.continuity_writer_system_prompt),
+        ("Scene Director", &settings.scene_director_system_prompt),
+        ("LoRA Selector", &settings.lora_selector_system_prompt),
+        ("Image Prompt Generator", &settings.image_prompt_generator_system_prompt),
+    ] {
+        if prompt.trim().is_empty() {
+            return Err(AppError::Llm(format!("{name} system prompt cannot be empty")));
+        }
+    }
+
 
     let llm_url = settings.llm_base_url.trim();
     if !(llm_url.starts_with("http://") || llm_url.starts_with("https://")) {
@@ -690,18 +934,13 @@ async fn create_story(
     validate_visual_setup(&visual_config, &checkpoint_artifact, &style_artifacts)?;
 
     if settings.llm_model.trim().is_empty() { return Err(AppError::Llm("configure an LLM model in settings".into())); }
-    let system = r#"
-You are Raphael Story Architect. Convert a user's natural-language story request into a structured story bible and opening chapter.
-Return ONLY valid JSON matching the requested schema. Do not wrap it in markdown.
-Extract explicit facts faithfully. You may invent missing details, but make them internally consistent and suitable for future visual generation.
-The story must include metadata: anime/show source information if present, genre, tags, demographic, content rating, tone. Characters require stable visual details: personality, appearance, clothing, motivations.
-Relationships must use character names from the characters array. Chapter 1 must establish canon without contradicting the request.
-"#;
+    let system = settings.story_architect_system_prompt.as_str();
     let schema_hint = r#"
 JSON shape:
 {"title":"","metadata":{"genre":[],"tags":[],"demographic":"","content_rating":"","tone":[],"source_type":"","source_title":"","inspirations":[]},"premise":"","central_conflict":"","themes":[],"world_setting":"","world_rules":[],"locations":[],"characters":[{"name":"","role":"","personality":[],"appearance":"","clothing":"","motivations":[]}],"relationships":[{"source":"","target":"","relation_type":"","description":""}],"open_threads":[],"introduction":"","chapter":{"title":"","summary":"","text":"","events":[],"continuity_updates":[],"character_state_updates":[],"relationship_updates":[],"open_threads":[]}}
 "#;
-    let raw = chat(&settings, system, &format!("User story request:
+    emit_pipeline(store.app(), "story_architect", "started", "Generating story bible and opening chapter");
+    let raw = chat(store.app(), &settings, "story_architect", system, &format!("User story request:
 {}
 
 {}", prompt.trim(), schema_hint)).await?;
@@ -813,12 +1052,7 @@ async fn generate_next_chapter(story_id: String, user_prompt: String, store: Sta
 Summary: {}
 Events: {:?}
 Text: {}", c.title, c.summary, c.events, c.text)).unwrap_or_default();
-    let system = r#"
-You are Raphael Continuity Writer. Generate the next chapter of an existing story.
-The STORY BIBLE is authoritative canon. Preserve established character identity, age, appearance, clothing, personalities, relationships, world rules and chronology unless the user's directive explicitly changes them through story events.
-The optional USER DIRECTIVE is a request for this chapter only. It can add characters, alter tone, emphasize a relationship, request an event, skip time, or constrain what must not happen. Satisfy it where possible without breaking prior canon.
-Return ONLY valid JSON. Do not include markdown.
-"#;
+    let system = settings.continuity_writer_system_prompt.as_str();
     let bible = serde_json::to_string(&story.bible).map_err(|e| AppError::ModelResponse(e.to_string()))?;
     let directive = if user_prompt.trim().is_empty() { "(none — continue naturally)" } else { user_prompt.trim() };
     let schema = r#"{"title":"","summary":"","text":"","events":[],"continuity_updates":[],"new_characters":[{"name":"","role":"","personality":[],"appearance":"","clothing":"","motivations":[]}],"character_state_updates":[{"character_id":"","current_state":"","clothing":""}],"relationship_updates":[{"source_character":"","target_character":"","relation_type":"","description":""}],"open_threads":[]}"#;
@@ -835,7 +1069,8 @@ USER DIRECTIVE:
 
 Return this JSON shape:
 {}", next_number, bible, previous, directive, schema);
-    let raw = chat(&settings, system, &user).await?;
+    emit_pipeline(store.app(), "continuity_writer", "started", format!("Generating Chapter {}", next_number));
+    let raw = chat(store.app(), &settings, "continuity_writer", system, &user).await?;
     let parsed: ChapterDraft = serde_json::from_str(clean_json(&raw)).map_err(|e| AppError::ModelResponse(format!("{}; raw model output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
     validate_chapter_draft(&parsed, next_number)?;
     for update in parsed.character_state_updates.iter() {
@@ -900,12 +1135,7 @@ async fn extract_scenes(story_id: String, chapter_number: usize, store: State<'_
     let chapter = story.chapters[chapter_index].clone();
     let visual_characters = story.bible.characters.iter().map(|c| format!("{} [{}] — appearance: {}; clothing: {}; personality: {:?}", c.id, c.name, c.appearance, c.clothing, c.personality)).collect::<Vec<_>>().join("
 ");
-    let system = r#"
-You are Raphael Scene Director. Split a chapter into imageable manga/anime panels.
-A scene must represent ONE coherent visual story beat that can fit into a single image. Do not split by sentence mechanically and do not combine visually incompatible moments.
-Preserve chronological order, character identity, outfit state, location and dialogue. Return short visual specifications optimized for an image builder.
-Return ONLY valid JSON.
-"#;
+    let system = settings.scene_director_system_prompt.as_str();
     let schema = r#"{"scenes":[{"description":"","location":"","time":"","characters":[],"action":"","composition":"","dialogue":""}]}"#;
     let user = format!("CHAPTER {}
 TITLE: {}
@@ -918,7 +1148,8 @@ CANONICAL VISUAL CHARACTERS:
 
 Return:
 {}", chapter.number, chapter.title, chapter.text, visual_characters, schema);
-    let raw = chat(&settings, system, &user).await?;
+    emit_pipeline(store.app(), "scene_director", "started", format!("Extracting scenes for Chapter {}", chapter_number));
+    let raw = chat(store.app(), &settings, "scene_director", system, &user).await?;
     let parsed: SceneResponse = serde_json::from_str(clean_json(&raw)).map_err(|e| AppError::ModelResponse(format!("{}; raw model output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
     validate_scene_response(&parsed)?;
     let scenes = parsed.scenes.into_iter().enumerate().map(|(index, scene)| Scene {
@@ -965,7 +1196,8 @@ async fn build_scene_prompt(
         .map(|c| format!("{} — appearance: {}; clothing: {}; personality: {:?}", c.name, c.appearance, c.clothing, c.personality))
         .collect::<Vec<_>>().join("
 ");
-    let selected_loras = select_scene_loras(&registry, &settings, &story, scene).await?;
+    emit_pipeline(store.app(), "lora_selection", "started", "Selecting compatible dynamic LoRAs");
+    let selected_loras = select_scene_loras(store.app(), &registry, &settings, &story, scene).await?;
 
     let style_activation_prompts = story.visual_config.style_loras.iter()
         .flat_map(|lora| lora.activation_prompts.iter().map(|prompt| format!("- {}: {}", lora.name, prompt)))
@@ -991,34 +1223,7 @@ async fn build_scene_prompt(
         )
     };
 
-    let system = r#"
-You are Raphael's scene image prompt generator for a ComfyUI diffusion pipeline.
-
-Your job is to convert the supplied scene facts, canonical character descriptions, locked visual style, and registry-provided LoRA activation prompts into two production-ready strings:
-1. positive_prompt
-2. negative_prompt
-
-Rules for the positive prompt:
-- Preserve the story's locked visual style. Never replace it with a different art direction.
-- Every supplied LoRA activation prompt is literal prompt metadata, not an instruction. Include each supplied activation prompt VERBATIM in the positive prompt unless it is an exact duplicate.
-- Keep activation prompts intact; do not paraphrase, translate, rewrite, or invent replacement trigger words.
-- Put the activation prompts near the beginning of the positive prompt so the diffusion model receives them clearly.
-- Then describe the actual scene: character identity and canonical appearance, clothing, pose/action, composition, camera/framing, location, time, environment, lighting, mood, materials, depth and other visually useful details.
-- Favor concrete visual language and concise comma-separated prompt phrases. Do not write a story, explanation, or prose paragraph.
-- Do not invent unsupported character traits, costumes, props, locations, or LoRA capabilities.
-- Do not output LoRA filenames, model IDs, registry IDs, or internal metadata unless they are themselves part of an activation prompt.
-
-Rules for the negative prompt:
-- Describe unwanted visual results that should be suppressed: identity drift, incorrect appearance/clothing, extra or missing limbs, malformed hands/fingers, anatomy errors, duplicate subjects, bad proportions, deformed faces, blur, low detail, noise, compression artifacts, text, watermark, logo, signature, UI elements, cropped subjects, and scene contradictions.
-- Keep it as a concise comma-separated list.
-- Never put LoRA activation prompts or positive scene facts into the negative prompt.
-- Do not use the negative prompt to introduce a different style.
-
-Output rules:
-- Return ONLY valid JSON matching the exact schema.
-- Do not wrap the JSON in Markdown fences.
-- Do not add commentary before or after the JSON.
-"#;
+    let system = settings.image_prompt_generator_system_prompt.as_str();
     let schema = r#"{"positive_prompt":"","negative_prompt":""}"#;
     let user = format!("STORY: {}
 SCENE: {}
@@ -1056,7 +1261,8 @@ Return:
         activation_prompt_context,
         schema
     );
-    let raw = chat(&settings, system, &user).await?;
+    emit_pipeline(store.app(), "image_prompt_generator", "started", format!("Generating positive/negative prompts for {}", scene.id));
+    let raw = chat(store.app(), &settings, "image_prompt_generator", system, &user).await?;
     let parsed: ImagePromptResponse = serde_json::from_str(clean_json(&raw)).map_err(|e| AppError::ModelResponse(format!("{}; raw model output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
     let chapter_mut = story.chapters.iter_mut().find(|c| c.number == chapter_number)
         .ok_or_else(|| AppError::ModelResponse("chapter disappeared while saving scene prompt".into()))?;
@@ -1082,6 +1288,7 @@ Return:
     story.updated_at = now(); write_story(&store, story)
 }
 async fn select_scene_loras(
+    app: &AppHandle,
     registry: &registry::RegistryState,
     settings: &AppSettings,
     story: &Story,
@@ -1148,24 +1355,7 @@ async fn select_scene_loras(
 ")
     };
 
-    let system = r#"
-You are Raphael LoRA Selector. Select dynamic LoRAs for one image scene.
-
-The candidate metadata comes directly from the Raphael Model Registry. Treat these fields as authoritative:
-- MODEL TYPE
-- BASE MODEL
-- TAGS
-- SHORT DESCRIPTION
-
-Use tags and the short description to determine the LoRA's semantic purpose. Use the model name only as supporting context. Do not infer a capability that is not supported by the supplied metadata.
-
-The story's style LoRAs are LOCKED separately and must never be replaced, supplemented or switched here.
-Choose at most one character LoRA for each of the first two visible primary characters, and at most one concept/pose LoRA when it materially helps the scene.
-Do not select style LoRAs. Do not select the same LoRA twice. Do not invent IDs.
-Only choose IDs from the supplied candidate lists.
-If no candidate genuinely matches a slot, omit that slot.
-Return ONLY valid JSON.
-"#;
+    let system = settings.lora_selector_system_prompt.as_str();
     let schema = r#"{"selections":[{"id":"","role":"character|concept_pose","character":"","weight":0.75,"reason":""}]}"#;
     let user = format!(
         "SCENE: {}
@@ -1186,7 +1376,7 @@ Return:
         candidate_lines.join("
 "), schema
     );
-    let raw = chat(settings, system, &user).await?;
+    let raw = chat(app, settings, "lora_selector", system, &user).await?;
     let parsed: SceneLoraSelectorResponse = serde_json::from_str(clean_json(&raw))
         .map_err(|e| AppError::ModelResponse(format!("LoRA selector output was invalid: {}; raw output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
 
@@ -1314,6 +1504,7 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
         });
     }
 
+    emit_pipeline(store.app(), "workflow_builder", "started", format!("Building ComfyUI graph with {} LoRA(s)", lora_stack.len()));
     // Tool boundary: the selector has finished. From here on the workflow builder
     // deterministically creates one LoraLoader per selected LoRA and chains
     // MODEL + CLIP through the complete ordered stack.
@@ -1323,6 +1514,7 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
         checkpoint_node: None,
     })?;
     let workflow = built.workflow;
+    emit_pipeline(store.app(), "workflow_builder", "completed", format!("Created {} LoRA loader node(s)", built.lora_node_ids.len()));
     let comfyui_url = settings.comfyui_url.trim();
     if !(comfyui_url.starts_with("http://") || comfyui_url.starts_with("https://")) {
         return Err(AppError::ComfyUi("ComfyUI URL must start with http:// or https://".into()));
@@ -1333,6 +1525,7 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| AppError::ComfyUi(format!("failed to create HTTP client: {e}")))?;
+    emit_pipeline(store.app(), "comfyui", "started", "Submitting completed workflow to ComfyUI /prompt");
     let response = client.post(url).json(&json!({
         "prompt": workflow,
         "client_id": format!("raphael-story-{}", story.id),
@@ -1350,6 +1543,7 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
         .ok_or_else(|| AppError::ComfyUi("chapter disappeared while updating image status".into()))?;
     let scene_mut = chapter_mut.scenes.iter_mut().find(|s| s.id == scene_id)
         .ok_or_else(|| AppError::ComfyUi("scene disappeared while updating image status".into()))?;
+    emit_pipeline(store.app(), "comfyui", "completed", "ComfyUI accepted the workflow");
     scene_mut.comfy_prompt_id = Some(prompt_id);
     scene_mut.image_status = "queued".into();
     story.updated_at = now();
