@@ -384,7 +384,7 @@ async fn fetch_source(
 
 fn extract_html_text(html: &str) -> String {
     let without_code = regex::Regex::new(
-        r"(?is)<(script|style|noscript|svg|canvas|template|iframe)[^>]*>.*?</\\1>",
+        r"(?is)<(script|style|noscript|svg|canvas|template|iframe)[^>]*>.*?</\1>",
     )
     .map(|regex| regex.replace_all(html, " ").into_owned())
     .unwrap_or_else(|_| html.to_string());
@@ -626,25 +626,67 @@ pub fn merge_into(target: &mut ResearchBundle, mut incoming: ResearchBundle) {
     target.retrieved_at = now();
 }
 
+#[derive(Debug, Deserialize)]
+struct TorCheckResponse {
+    #[serde(rename = "IsTor")]
+    is_tor: bool,
+    #[serde(rename = "IP")]
+    ip: String,
+}
+
 pub async fn check_private_search(settings: &AppSettings) -> AppResult<()> {
     let _ = ensure_local_endpoint(settings.web_search_url.trim(), "web search")?;
     let _ = ensure_local_proxy(settings.web_proxy_url.trim())?;
 
-    let client = build_local_client(Duration::from_secs(5))?;
-    let response = client
-        .get(
-            Url::parse(settings.web_search_url.trim())
-                .map_err(|error| AppError::WebResearch(error.to_string()))?,
-        )
+    let local_client = build_local_client(Duration::from_secs(5))?;
+    let local_url = Url::parse(settings.web_search_url.trim())
+        .map_err(|error| AppError::WebResearch(error.to_string()))?;
+    let response = local_client
+        .get(local_url)
         .send()
         .await
         .map_err(|error| AppError::WebResearch(format!("private web gateway is unreachable: {error}")))?;
 
-    if !response.status().is_success() && response.status() != StatusCode::NOT_FOUND {
+    if !(response.status().is_success()
+        || response.status() == StatusCode::NOT_FOUND
+        || response.status() == StatusCode::METHOD_NOT_ALLOWED)
+    {
         return Err(AppError::WebResearch(format!(
             "private web gateway returned HTTP {}",
             response.status()
         )));
+    }
+
+    let proxy_client = build_client(settings, Duration::from_secs(20))?;
+    let tor_response = proxy_client
+        .get("https://check.torproject.org/api/ip")
+        .send()
+        .await
+        .map_err(|error| AppError::WebResearch(format!("local Tor proxy is unreachable: {error}")))?;
+
+    if !tor_response.status().is_success() {
+        return Err(AppError::WebResearch(format!(
+            "Tor connectivity check returned HTTP {}",
+            tor_response.status()
+        )));
+    }
+
+    let tor = tor_response
+        .json::<TorCheckResponse>()
+        .await
+        .map_err(|error| AppError::WebResearch(format!("invalid Tor connectivity response: {error}")))?;
+
+    if !tor.is_tor {
+        return Err(AppError::WebResearch(
+            "the configured local proxy did not produce a Tor-routed connection; refusing private research"
+                .into(),
+        ));
+    }
+
+    if tor.ip.trim().is_empty() {
+        return Err(AppError::WebResearch(
+            "Tor connectivity check did not return an exit IP".into(),
+        ));
     }
 
     Ok(())
