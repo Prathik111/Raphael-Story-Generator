@@ -27,6 +27,8 @@ pub struct WorkflowBuildRequest {
     pub workflow: Value,
     pub lora_stack: Vec<WorkflowLoraInput>,
     pub checkpoint_node: Option<String>,
+    pub image_width: u32,
+    pub image_height: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -36,6 +38,48 @@ pub struct WorkflowBuildResult {
     pub checkpoint_node: String,
 }
 
+fn validate_image_dimension(value: u32, label: &str) -> AppResult<()> {
+    if !(512..=2048).contains(&value) || value % 64 != 0 {
+        return Err(AppError::ComfyUi(format!("image {label} must be between 512 and 2048 and divisible by 64; received {value}")));
+    }
+    Ok(())
+}
+
+fn replace_image_size_placeholders(value: &mut Value, width: u32, height: u32) -> usize {
+    let mut replaced = 0;
+    match value {
+        Value::String(text) => {
+            if text == "{{IMAGE_WIDTH}}" { *value = Value::from(width); return 1; }
+            if text == "{{IMAGE_HEIGHT}}" { *value = Value::from(height); return 1; }
+            if text == "{{IMAGE_SIZE}}" { *value = Value::String(format!("{width}x{height}")); return 1; }
+            let original = text.clone();
+            *text = text.replace("{{IMAGE_WIDTH}}", &width.to_string())
+                .replace("{{IMAGE_HEIGHT}}", &height.to_string())
+                .replace("{{IMAGE_SIZE}}", &format!("{width}x{height}"));
+            if *text != original { replaced += 1; }
+        }
+        Value::Array(items) => for item in items { replaced += replace_image_size_placeholders(item, width, height); },
+        Value::Object(map) => for item in map.values_mut() { replaced += replace_image_size_placeholders(item, width, height); },
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+    replaced
+}
+
+fn inject_latent_size(workflow: &mut Value, width: u32, height: u32) -> usize {
+    let Value::Object(nodes) = workflow else { return 0; };
+    let mut count = 0;
+    for node in nodes.values_mut() {
+        let class_type = node.get("class_type").and_then(Value::as_str).unwrap_or_default().to_ascii_lowercase();
+        if !class_type.contains("empty") || !class_type.contains("latent") { continue; }
+        let Some(inputs) = node.get_mut("inputs").and_then(Value::as_object_mut) else { continue; };
+        if inputs.contains_key("width") && inputs.contains_key("height") {
+            inputs.insert("width".into(), Value::from(width));
+            inputs.insert("height".into(), Value::from(height));
+            count += 1;
+        }
+    }
+    count
+}
 fn find_checkpoint_node(workflow: &Map<String, Value>, requested: Option<&str>) -> AppResult<String> {
     if let Some(node_id) = requested {
         let Some(node) = workflow.get(node_id) else {
@@ -143,7 +187,14 @@ fn replace_exact_refs(value: &mut Value, checkpoint_node: &str, output_index: us
 }
 
 pub fn build_workflow(request: WorkflowBuildRequest) -> AppResult<WorkflowBuildResult> {
+    validate_image_dimension(request.image_width, "width")?;
+    validate_image_dimension(request.image_height, "height")?;
     let mut workflow = request.workflow;
+    let placeholder_count = replace_image_size_placeholders(&mut workflow, request.image_width, request.image_height);
+    let latent_count = inject_latent_size(&mut workflow, request.image_width, request.image_height);
+    if placeholder_count == 0 && latent_count == 0 {
+        return Err(AppError::ComfyUi("workflow has no image-size injection point; add {{IMAGE_WIDTH}}/{{IMAGE_HEIGHT}} placeholders or an Empty*Latent node with width and height inputs".into()));
+    }
     let Value::Object(ref mut nodes) = workflow else {
         return Err(AppError::ComfyUi(
             "workflow builder requires a ComfyUI API-format object".into(),
@@ -268,6 +319,8 @@ mod tests {
         let result = build_workflow(WorkflowBuildRequest {
             workflow: base_workflow(),
             checkpoint_node: None,
+            image_width: 1024,
+            image_height: 1024,
             lora_stack: vec![
                 WorkflowLoraInput { file_name: "style.safetensors".into(), weight: 0.7, clip_weight: None },
                 WorkflowLoraInput { file_name: "character.safetensors".into(), weight: 0.85, clip_weight: None },
@@ -293,6 +346,10 @@ mod tests {
             workflow: input.clone(),
             checkpoint_node: None,
             lora_stack: Vec::new(),
+            image_width: 1024,
+            image_height: 1024,
+            image_width: 1024,
+            image_height: 1024,
         }).unwrap();
 
         assert_eq!(result.workflow, input);
