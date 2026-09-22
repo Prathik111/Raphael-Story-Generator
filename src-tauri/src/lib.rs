@@ -2114,7 +2114,7 @@ pub fn run() {
             let comfyui_url = web_settings.comfyui_url.clone();
             app.manage(store);
 
-            {
+            if web_settings.web_research_enabled {
                 let handle = app.handle().clone();
                 let startup_settings = web_settings.clone();
                 tauri::async_runtime::spawn(async move {
