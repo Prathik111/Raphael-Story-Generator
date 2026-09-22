@@ -6,4 +6,6 @@ RUN apt-get update \
 
 EXPOSE 9050
 
+USER debian-tor
+
 CMD ["tor", "--SocksPort", "0.0.0.0:9050", "--CookieAuthentication", "0", "--Log", "notice", "stdout"]
