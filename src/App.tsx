@@ -18,8 +18,6 @@ function BackgroundRaphael() {
   return <div className="background-raphael" aria-hidden="true"><PulseMark /></div>;
 }
 
-const MODEL_MANAGER_THUMBNAIL_BASE_URL = 'http://127.0.0.1:1421/api/public/model-thumbnail/';
-
 function splitTags(values: string[]) { return values.filter(Boolean).slice(0, 12); }
 
 function formatDate(value: string) {
@@ -47,12 +45,14 @@ function RegistryModelChoiceCard({
   kind,
   selected,
   disabled,
+  thumbnail,
   onClick,
 }: {
   model: RegistryCatalog['checkpoints'][number];
   kind: 'checkpoint' | 'lora';
   selected: boolean;
   disabled: boolean;
+  thumbnail?: string;
   onClick: () => void;
 }) {
   const mark = kind === 'checkpoint' ? 'CKPT' : 'LORA';
@@ -63,12 +63,7 @@ function RegistryModelChoiceCard({
     disabled={disabled}
   >
     <div className={"registry-choice-visual " + kind}>
-      <img
-        src={MODEL_MANAGER_THUMBNAIL_BASE_URL + encodeURIComponent(model.id)}
-        alt=""
-        loading="lazy"
-        onError={event => { event.currentTarget.style.display = "none"; }}
-      />
+      {thumbnail ? <img src={thumbnail} alt="" /> : null}
       <span>{mark}</span>
       <i />
       <b />
@@ -86,6 +81,7 @@ function VisualSetupOverlay({
   registryStatus,
   catalog,
   catalogError,
+  thumbnails,
   checkpointId,
   setCheckpointId,
   styleLoraIds,
@@ -96,6 +92,7 @@ function VisualSetupOverlay({
   registryStatus: RegistryStatusDto;
   catalog: RegistryCatalog;
   catalogError: string | null;
+  thumbnails: Record<string, string>;
   checkpointId: string;
   setCheckpointId: (value: string) => void;
   styleLoraIds: string[];
@@ -564,6 +561,7 @@ export default function App() {
   const [registryStatus, setRegistryStatus] = useState<RegistryStatusDto>({ status: 'starting', url: 'http://127.0.0.1:43217', detail: 'Starting Raphael Model Registry…' });
   const [registryCatalog, setRegistryCatalog] = useState<RegistryCatalog>({ checkpoints: [], checkpoint_total: 0, loras: [], lora_total: 0 });
   const [registryCatalogError, setRegistryCatalogError] = useState<string | null>(null);
+  const [registryModelThumbnails, setRegistryModelThumbnails] = useState<Record<string, string>>({});
   const [checkpointId, setCheckpointId] = useState('');
   const [styleLoraIds, setStyleLoraIds] = useState<string[]>([]);
   const [generationTraces, setGenerationTraces] = useState<GenerationTrace[]>([]);
@@ -786,6 +784,33 @@ export default function App() {
   }, [registryStatus.status]);
 
   useEffect(() => {
+    if (registryStatus.status !== 'on') return;
+
+    const ids = [...registryCatalog.checkpoints, ...registryCatalog.loras]
+      .map(model => model.id)
+      .filter((id, index, values) => values.indexOf(id) === index)
+      .filter(id => !registryModelThumbnails[id]);
+
+    if (ids.length === 0) return;
+
+    let disposed = false;
+    const loadThumbnails = async () => {
+      try {
+        const thumbnails = await api.getRegistryModelThumbnails(ids);
+        if (disposed || Object.keys(thumbnails).length === 0) return;
+        setRegistryModelThumbnails(current => ({ ...current, ...thumbnails }));
+      } catch {
+        // The model cards retain their visual placeholder when the shared cache is unavailable.
+      }
+    };
+
+    void loadThumbnails();
+    return () => {
+      disposed = true;
+    };
+  }, [registryStatus.status, registryCatalog.checkpoints, registryCatalog.loras, registryModelThumbnails]);
+
+  useEffect(() => {
     if (registryStatus.status === 'on' && !checkpointId && registryCatalog.checkpoints.length > 0) {
       setCheckpointId(registryCatalog.checkpoints[0].id);
     }
@@ -908,6 +933,7 @@ export default function App() {
       registryStatus={registryStatus}
       catalog={registryCatalog}
       catalogError={registryCatalogError}
+      thumbnails={registryModelThumbnails}
       checkpointId={checkpointId}
       setCheckpointId={setCheckpointId}
       styleLoraIds={styleLoraIds}
