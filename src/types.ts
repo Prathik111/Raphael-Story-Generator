@@ -48,6 +48,32 @@ export interface StoryBible {
   continuity_notes: string[];
 }
 
+export interface VisualStyleLora {
+  id: string;
+  name: string;
+  weight: number;
+  file_name: string;
+  activation_prompts: string[];
+}
+
+export interface StoryVisualConfig {
+  checkpoint_id: string;
+  checkpoint_name: string;
+  checkpoint_file_name: string;
+  style_loras: VisualStyleLora[];
+}
+
+export interface SceneLoraSelection {
+  id: string;
+  name: string;
+  role: 'character' | 'concept_pose';
+  character: string | null;
+  weight: number;
+  file_name: string;
+  activation_prompts: string[];
+  reason: string;
+}
+
 export interface Scene {
   id: string;
   order: number;
@@ -60,6 +86,7 @@ export interface Scene {
   dialogue: string;
   positive_prompt: string;
   negative_prompt: string;
+  selected_loras: SceneLoraSelection[];
   image_status: 'not_ready' | 'prompt_ready' | 'queued' | 'generated' | 'failed';
   image_url: string | null;
   comfy_prompt_id: string | null;
@@ -82,6 +109,7 @@ export interface Story {
   title: string;
   source_prompt: string;
   metadata: StoryMetadata;
+  visual_config: StoryVisualConfig;
   introduction: string;
   bible: StoryBible;
   chapters: Chapter[];
@@ -136,4 +164,9 @@ export interface RegistryCatalog {
   checkpoint_total: number;
   loras: RegistryModel[];
   lora_total: number;
+}
+
+export interface StoryVisualSetup {
+  checkpoint_id: string;
+  style_lora_ids: string[];
 }
