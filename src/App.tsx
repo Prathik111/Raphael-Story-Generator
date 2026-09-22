@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api } from './tauri';
-import type { AppSettings, AppState, Chapter, RegistryCatalog, RegistryStatusDto, Scene, Story, StoryVisualSetup } from './types';
+import { api, subscribeToLlm, subscribeToPipeline } from './tauri';
+import type { AppSettings, AppState, Chapter, LlmGenerationEvent, PipelineEvent, RegistryCatalog, RegistryStatusDto, Scene, Story, StoryVisualSetup } from './types';
 
 function PulseMark() {
   return <div className="raphael-core" aria-label="Raphael"><span className="core-dot"/><i className="core-orbit orbit-a"/><i className="core-orbit orbit-b"/><i className="core-orbit orbit-c"/></div>;
@@ -171,6 +171,71 @@ function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPromp
   </div>;
 }
 
+type GenerationTrace = {
+  generation_id: string;
+  stage: string;
+  status: LlmGenerationEvent['status'];
+  model: string;
+  system_prompt: string;
+  user_prompt: string;
+  response: string;
+  error: string | null;
+};
+
+function GenerationMonitor({
+  generations,
+  pipeline,
+  onClear,
+}: {
+  generations: GenerationTrace[];
+  pipeline: PipelineEvent[];
+  onClear: () => void;
+}) {
+  const active = generations.find(g => g.status === 'started' || g.status === 'token') || null;
+  const stageLabel = (stage: string) => stage.replaceAll('_', ' ').toUpperCase();
+
+  return <section className="hud-panel generation-monitor">
+    <div className="panel-title-row">
+      <div><div className="section-head">LIVE GENERATION TRACE</div><span className="tiny">{active ? ('STREAMING · ' + stageLabel(active.stage)) : 'EVERY LLM CALL · TOKEN STREAM · PIPELINE EVENTS'}</span></div>
+      <div className="trace-actions"><span className={'trace-live ' + (active ? 'active' : '')}><i />{active ? 'LIVE' : 'IDLE'}</span><button className="text-btn" onClick={onClear} disabled={!generations.length && !pipeline.length}>CLEAR</button></div>
+    </div>
+
+    {pipeline.length ? <div className="pipeline-log">
+      {pipeline.slice(-8).map(event => <div className={'pipeline-log-item ' + event.status} key={event.event_id}>
+        <span>{stageLabel(event.stage)}</span><strong>{event.message}</strong>
+      </div>)}
+    </div> : null}
+
+    <div className="generation-list">
+      {generations.length === 0 ? <div className="scene-empty">No generations yet. Start a story, chapter, scene extraction, LoRA selection, or image prompt to watch the live trace.</div> : generations.slice().reverse().map(generation => (
+        <details className={'generation-card ' + ((generation.status === 'started' || generation.status === 'token') ? 'streaming' : '')} key={generation.generation_id} open={generation.generation_id === active?.generation_id}>
+          <summary>
+            <span className={'generation-dot ' + generation.status} />
+            <span className="generation-stage">{stageLabel(generation.stage)}</span>
+            <span className="generation-model">{generation.model}</span>
+            <span className="generation-status">{generation.status.toUpperCase()}</span>
+          </summary>
+          <div className="generation-body">
+            <div className="trace-block">
+              <div className="section-head">SYSTEM PROMPT</div>
+              <pre className="trace-box">{generation.system_prompt}</pre>
+            </div>
+            <div className="trace-block">
+              <div className="section-head">USER PROMPT</div>
+              <pre className="trace-box">{generation.user_prompt}</pre>
+            </div>
+            <div className="trace-block">
+              <div className="section-head">LLM RESPONSE {(generation.status === 'started' || generation.status === 'token') ? '· STREAMING' : ''}</div>
+              <pre className="trace-box response">{generation.response}{(generation.status === 'started' || generation.status === 'token') ? '▌' : ''}</pre>
+            </div>
+            {generation.error ? <div className="error-box">{generation.error}</div> : null}
+          </div>
+        </details>
+      ))}
+    </div>
+  </section>;
+}
+
 function SettingsOverlay({ settings, onSave, onClose, onError }: { settings: AppSettings; onSave: (settings: AppSettings) => Promise<void>; onClose: () => void; onError: (message: string) => void }) {
   const [draft, setDraft] = useState(settings); const [busy, setBusy] = useState(false);
   const save = async () => {
@@ -193,6 +258,13 @@ function SettingsOverlay({ settings, onSave, onClose, onError }: { settings: App
       <label>Model<input value={draft.llm_model} onChange={e => setDraft({ ...draft, llm_model: e.target.value })} placeholder="qwen3:8b"/></label>
       <label>API key<input type="password" value={draft.llm_api_key} onChange={e => setDraft({ ...draft, llm_api_key: e.target.value })} placeholder="Optional for local endpoints"/></label>
       <label>Temperature<input type="number" min="0" max="2" step="0.1" value={draft.temperature} onChange={e => setDraft({ ...draft, temperature: Number(e.target.value) || 0 })}/></label>
+      <div className="section-head setting-gap">SYSTEM PROMPTS · FULLY CUSTOMIZABLE</div>
+      <small className="settings-hint">These prompts are sent as the system message for each LLM generation stage. They are persisted with the application settings and shown live in the Generation Trace.</small>
+      <label>Story Architect<small className="settings-hint">Creates the story bible, opening chapter, characters, relationships, and visual canon.</small><textarea className="system-prompt-input" value={draft.story_architect_system_prompt} onChange={e => setDraft({ ...draft, story_architect_system_prompt: e.target.value })}/></label>
+      <label>Continuity Writer<small className="settings-hint">Generates subsequent chapters while preserving established canon.</small><textarea className="system-prompt-input" value={draft.continuity_writer_system_prompt} onChange={e => setDraft({ ...draft, continuity_writer_system_prompt: e.target.value })}/></label>
+      <label>Scene Director<small className="settings-hint">Splits a chapter into imageable visual beats.</small><textarea className="system-prompt-input" value={draft.scene_director_system_prompt} onChange={e => setDraft({ ...draft, scene_director_system_prompt: e.target.value })}/></label>
+      <label>LoRA Selector<small className="settings-hint">Chooses character and concept/pose LoRAs from Registry metadata.</small><textarea className="system-prompt-input" value={draft.lora_selector_system_prompt} onChange={e => setDraft({ ...draft, lora_selector_system_prompt: e.target.value })}/></label>
+      <label>Image Prompt Generator<small className="settings-hint">Builds the final positive and negative diffusion prompts from scene facts and LoRA activation prompts.</small><textarea className="system-prompt-input" value={draft.image_prompt_generator_system_prompt} onChange={e => setDraft({ ...draft, image_prompt_generator_system_prompt: e.target.value })}/></label>
       <div className="section-head setting-gap">COMFYUI</div>
       <label>API URL<input value={draft.comfyui_url} onChange={e => setDraft({ ...draft, comfyui_url: e.target.value })} placeholder="http://127.0.0.1:8188"/></label>
       <label>API workflow template<small className="settings-hint">Use POSITIVE_PROMPT, NEGATIVE_PROMPT, SEED, STORY_ID, SCENE_ID and CHECKPOINT placeholders. The workflow must contain a CheckpointLoaderSimple or CheckpointLoader node. Raphael's workflow-builder tool inserts one LoraLoader node per selected LoRA and chains MODEL + CLIP through the full stack automatically.</small><textarea className="workflow-input" value={draft.comfyui_workflow_json} onChange={e => setDraft({ ...draft, comfyui_workflow_json: e.target.value })} placeholder='Paste a ComfyUI API workflow JSON template here...'/></label>
@@ -211,6 +283,8 @@ export default function App() {
   const [registryCatalogError, setRegistryCatalogError] = useState<string | null>(null);
   const [checkpointId, setCheckpointId] = useState('');
   const [styleLoraIds, setStyleLoraIds] = useState<string[]>([]);
+  const [generationTraces, setGenerationTraces] = useState<GenerationTrace[]>([]);
+  const [pipelineTrace, setPipelineTrace] = useState<PipelineEvent[]>([]);
 
   const loadState = async () => {
     const next = await api.getState();
@@ -227,6 +301,61 @@ export default function App() {
       setError(String(e));
     }
   };
+  useEffect(() => {
+    let disposed = false;
+    let unlistenLlm: (() => void) | null = null;
+    let unlistenPipeline: (() => void) | null = null;
+
+    void subscribeToLlm(event => {
+      if (disposed) return;
+      setGenerationTraces(current => {
+        const existing = current.find(item => item.generation_id === event.generation_id);
+        if (event.status === 'started') {
+          if (existing) return current;
+          const next: GenerationTrace = {
+            generation_id: event.generation_id,
+            stage: event.stage,
+            status: event.status,
+            model: event.model,
+            system_prompt: event.system_prompt || '',
+            user_prompt: event.user_prompt || '',
+            response: '',
+            error: null,
+          };
+          return [...current, next].slice(-20);
+        }
+        if (!existing) return current;
+
+        return current.map(item => {
+          if (item.generation_id !== event.generation_id) return item;
+          return {
+            ...item,
+            status: event.status,
+            response: event.response ?? (event.delta ? item.response + event.delta : item.response),
+            error: event.error || item.error,
+          };
+        });
+      });
+    }).then(unlisten => {
+      if (disposed) unlisten();
+      else unlistenLlm = unlisten;
+    });
+
+    void subscribeToPipeline(event => {
+      if (disposed) return;
+      setPipelineTrace(current => [...current, event].slice(-20));
+    }).then(unlisten => {
+      if (disposed) unlisten();
+      else unlistenPipeline = unlisten;
+    });
+
+    return () => {
+      disposed = true;
+      unlistenLlm?.();
+      unlistenPipeline?.();
+    };
+  }, []);
+
   useEffect(() => { void loadState().catch(e => setError(String(e))); }, []);
   useEffect(() => {
     let disposed = false;
@@ -363,7 +492,7 @@ export default function App() {
   return <div className="app-shell">
     <header className="topbar">
       <div className="brand"><PulseMark/><div><div className="brand-title">RAPHAEL</div><div className="brand-subtitle">STORY GENERATOR</div></div></div>
-      <div className="top-status"><span className={state.llm_configured ? 'status-ok' : 'status-warn'}>LLM {state.llm_configured ? 'READY' : 'NOT CONFIGURED'}</span><span className={`registry-health ${registryStatus.status}`} title={registryStatus.detail || registryStatus.url}><i />REGISTRY {registryStatus.status === 'on' ? 'ON' : registryStatus.status === 'starting' ? 'STARTING' : 'OFF'}</span><span>SCENES {totalScenes}</span><button className="icon-btn" onClick={() => setSettingsOpen(true)} title="Engine settings">⚙</button></div>
+      <div className="top-status"><span className={state.llm_configured ? 'status-ok' : 'status-warn'}>LLM {state.llm_configured ? 'READY' : 'NOT CONFIGURED'}</span><span className={`registry-health ${registryStatus.status}`} title={registryStatus.detail || registryStatus.url}><i />REGISTRY {registryStatus.status === 'on' ? 'ON' : registryStatus.status === 'starting' ? 'STARTING' : 'OFF'}</span><span>SCENES {totalScenes}</span><span className={generationTraces.some(g => g.status === 'started' || g.status === 'token') ? 'status-ok' : ''}>TRACE {generationTraces.length}</span><button className="icon-btn" onClick={() => setSettingsOpen(true)} title="Engine settings">⚙</button></div>
     </header>
 
     <div className="workspace">
@@ -394,6 +523,11 @@ export default function App() {
 
       <aside className="inspector">
         <RegistryPanel status={registryStatus} catalog={registryCatalog} error={registryCatalogError}/>
+        <GenerationMonitor
+          generations={generationTraces}
+          pipeline={pipelineTrace}
+          onClear={() => { setGenerationTraces([]); setPipelineTrace([]); }}
+        />
         {story ? <MetadataPanel story={story}/> : <section className="hud-panel inspector-panel placeholder-inspector"><div className="section-head">PIPELINE</div><div className="pipeline-step active"><b>01</b><span>STORY BIBLE</span></div><div className="pipeline-step"><b>02</b><span>CHAPTERS</span></div><div className="pipeline-step"><b>03</b><span>SCENE EXTRACTION</span></div><div className="pipeline-step"><b>04</b><span>IMAGE BUILDER</span></div><div className="pipeline-note">The story engine is designed so scene extraction and ComfyUI image generation can run without changing the story canon.</div></section>}
       </aside>
     </div>
