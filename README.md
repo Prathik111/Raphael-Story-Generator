@@ -188,3 +188,7 @@ Feature-branch CI runs use the same concurrency group as pull-request runs, so t
 
 
 All actionable UI controls are rendered as semantic buttons, with runtime errors exposed through visible alert/error surfaces.
+
+
+### Runtime service health
+Raphael continuously probes the live Model Registry `/health`, SearXNG search API, and ComfyUI `/system_stats` endpoint. The UI reports ONLINE/OFFLINE/CHECKING based on those API responses rather than static configuration text.
