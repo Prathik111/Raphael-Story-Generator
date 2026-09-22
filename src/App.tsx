@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, subscribeToComfy, subscribeToLlm, subscribeToPipeline } from './tauri';
 import type { AppSettings, AppState, Chapter, ComfyGenerationEvent, LlmGenerationEvent, PipelineEvent, RegistryCatalog, RegistryStatusDto, Scene, ServiceStatusBoard, Story, StoryVisualSetup } from './types';
 
@@ -421,6 +421,7 @@ export default function App() {
     comfyui: { service: 'comfyui', status: 'checking', url: 'http://127.0.0.1:8188', detail: 'Checking ComfyUI API…' },
   });
   const [serviceRefreshing, setServiceRefreshing] = useState(false);
+  const serviceProbeActive = useRef(false);
 
 
   const loadState = async () => {
@@ -578,16 +579,20 @@ export default function App() {
   }, [story?.id, selectedChapterNumber]);
 
   const refreshServiceStatus = async () => {
+    if (serviceProbeActive.current) return;
+    serviceProbeActive.current = true;
     setServiceRefreshing(true);
     try {
       setServiceStatus(await api.getServiceStatus());
     } catch (e) {
+      const message = 'Health probe failed: ' + toErrorMessage(e);
       setServiceStatus(current => ({
-        registry: { ...current.registry, status: 'offline', detail: toErrorMessage(e) },
-        searxng: { ...current.searxng, status: 'offline', detail: toErrorMessage(e) },
-        comfyui: { ...current.comfyui, status: 'offline', detail: toErrorMessage(e) },
+        registry: { ...current.registry, status: 'checking', detail: message },
+        searxng: { ...current.searxng, status: 'checking', detail: message },
+        comfyui: { ...current.comfyui, status: 'checking', detail: message },
       }));
     } finally {
+      serviceProbeActive.current = false;
       setServiceRefreshing(false);
     }
   };
