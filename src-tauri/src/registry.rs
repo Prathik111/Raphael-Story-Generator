@@ -4,7 +4,7 @@ use registry_client::RegistryClient;
 use registry_core::{ModelSearch, ModelType};
 use serde::Serialize;
 use std::{
-    env, fs,
+    env,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -16,7 +16,7 @@ use tauri::{AppHandle, Manager, State};
 use tokio::time::{sleep, timeout};
 
 const DEFAULT_PORT: u16 = 43217;
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -187,11 +187,10 @@ impl RegistryState {
 
     async fn spawn_registry(&self) -> Result<(), String> {
         if let Some(executable) = &self.inner.executable {
-            spawn_hidden(
-                std::process::Command::new(executable)
-                    .arg("server"),
-            )
-            .map_err(|error| format!("failed to start {}: {error}", executable.display()))?;
+            let mut command = std::process::Command::new(executable);
+            command.arg("server");
+            spawn_hidden(command)
+                .map_err(|error| format!("failed to start {}: {error}", executable.display()))?;
             return Ok(());
         }
 
