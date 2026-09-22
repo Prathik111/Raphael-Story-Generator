@@ -15,7 +15,5 @@ services:
       - tor
     ports:
       - "127.0.0.1:8080:8080"
-    environment:
-      SEARXNG_SECRET: \${SEARXNG_SECRET:-change-me-to-a-random-secret}
     volumes:
       - ./searxng:/etc/searxng:rw
