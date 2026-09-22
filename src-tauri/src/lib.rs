@@ -1983,7 +1983,7 @@ fn cached_model_thumbnail(registry_model_id: &str) -> AppResult<Option<String>> 
         };
 
         let cached_path = match connection.query_row(
-            "SELECT COALESCE(NULLIF(cover_path, ''), NULLIF(thumbnail_path, ''))
+            "SELECT COALESCE(NULLIF(thumbnail_path, ''), NULLIF(cover_path, ''))
              FROM models
              WHERE registry_model_id = ?1
              LIMIT 1",
