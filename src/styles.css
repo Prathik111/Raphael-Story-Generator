@@ -148,3 +148,9 @@
 .error-banner{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px;margin-bottom:10px}.error-banner strong{font-size:6px;letter-spacing:.12em;color:rgba(248,204,204,.55)}.error-banner span{min-width:0;word-break:break-word}
 
 .prompt-size{margin:6px 0 8px;font-size:9px;color:rgba(168,216,240,.72)}
+
+.research-source-text{margin-top:6px;border:1px solid rgba(255,255,255,.045);background:rgba(0,0,0,.14)}
+.research-source-text summary{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 7px;list-style:none;cursor:pointer;font-size:5px;letter-spacing:.1em;color:rgba(190,223,238,.5)}
+.research-source-text summary::-webkit-details-marker{display:none}
+.research-source-text summary small{font-size:5px;letter-spacing:.04em;color:rgba(255,255,255,.2)}
+.research-source-text pre{margin:0;padding:7px;max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:5px;line-height:1.55;color:rgba(225,239,246,.31);font-family:Consolas,monospace}
