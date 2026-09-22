@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { AppSettings, AppState, RegistryCatalog, RegistryStatusDto, SceneExtractionResult, Story, StoryVisualSetup } from './types';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import type { AppSettings, AppState, LlmGenerationEvent, PipelineEvent, RegistryCatalog, RegistryStatusDto, SceneExtractionResult, Story, StoryVisualSetup } from './types';
 
 export const isWebApp = typeof window !== 'undefined' && !(window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 
@@ -11,6 +12,12 @@ const command = <T,>(name: string, args: Record<string, unknown> = {}) => {
   }
   return invoke<T>(name, args);
 };
+
+export const subscribeToLlm = (handler: (event: LlmGenerationEvent) => void): Promise<UnlistenFn> =>
+  isWebApp ? Promise.resolve(() => {}) : listen<LlmGenerationEvent>('raphael:llm', event => handler(event.payload));
+
+export const subscribeToPipeline = (handler: (event: PipelineEvent) => void): Promise<UnlistenFn> =>
+  isWebApp ? Promise.resolve(() => {}) : listen<PipelineEvent>('raphael:pipeline', event => handler(event.payload));
 
 export const api = {
   isWebApp,
