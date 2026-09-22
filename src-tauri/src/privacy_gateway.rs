@@ -12,6 +12,7 @@ use uuid::Uuid;
 const PROJECT_NAME: &str = "raphael-private-search";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
+const SECRET_FILE: &str = ".searxng-secret";
 
 fn compose_dir(app: &AppHandle) -> AppResult<PathBuf> {
     let packaged = app
@@ -48,26 +49,31 @@ fn runtime_dir(app: &AppHandle) -> AppResult<PathBuf> {
 }
 
 fn ensure_secret(runtime: &Path) -> AppResult<String> {
-    let path = runtime.join(".env");
+    let path = runtime.join(SECRET_FILE);
 
     if path.is_file() {
-        let content = fs::read_to_string(&path)
+        let secret = fs::read_to_string(&path)
             .map_err(|error| AppError::WebResearch(format!("failed to read private search secret: {error}")))?;
-
-        for line in content.lines() {
-            if let Some(value) = line.strip_prefix("SEARXNG_SECRET=") {
-                let value = value.trim();
-                if !value.is_empty() {
-                    return Ok(value.to_string());
-                }
-            }
+        let secret = secret.trim();
+        if !secret.is_empty() {
+            return Ok(secret.to_string());
         }
     }
 
     let secret = Uuid::new_v4().simple().to_string();
-    fs::write(&path, format!("SEARXNG_SECRET={secret}\n"))
+    fs::write(&path, format!("{secret}\n"))
         .map_err(|error| AppError::WebResearch(format!("failed to create private search secret: {error}")))?;
     Ok(secret)
+}
+
+fn configure_searxng_secret(runtime: &Path, secret: &str) -> AppResult<()> {
+    let path = runtime.join("searxng").join("settings.yml");
+    let content = fs::read_to_string(&path)
+        .map_err(|error| AppError::WebResearch(format!("failed to read SearXNG settings: {error}")))?;
+    let configured = content.replace("__RAPHAEL_SECRET__", secret);
+    fs::write(&path, configured)
+        .map_err(|error| AppError::WebResearch(format!("failed to configure SearXNG secret: {error}")))?;
+    Ok(())
 }
 
 fn copy_dir_recursive(source: &Path, target: &Path) -> AppResult<()> {
@@ -103,7 +109,8 @@ fn install_runtime_files(app: &AppHandle) -> AppResult<PathBuf> {
 
     copy_dir_recursive(&source, &target)?;
 
-    ensure_secret(&target)?;
+    let secret = ensure_secret(&target)?;
+    configure_searxng_secret(&target, &secret)?;
     Ok(target)
 }
 
