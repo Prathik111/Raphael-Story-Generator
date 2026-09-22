@@ -2,6 +2,7 @@ mod comfyui;
 mod privacy_gateway;
 mod registry;
 mod research;
+mod service_status;
 mod workflow_builder;
 
 use base64::Engine;
@@ -1853,6 +1854,17 @@ fn get_scene_image(
 }
 
 #[tauri::command]
+async fn get_service_status(
+    store: State<'_, Store>,
+    registry: State<'_, registry::RegistryState>,
+) -> service_status::ServiceStatusBoard {
+    let settings = match store.settings.read() {
+        Ok(value) => value.clone(),
+        Err(_) => AppSettings::default(),
+    };
+    service_status::probe(&registry, &settings).await
+}
+#[tauri::command]
 async fn test_private_web_research(store: State<'_, Store>) -> AppResult<String> {
     let settings = store.settings.read().map_err(|e| AppError::Storage(e.to_string()))?.clone();
     privacy_gateway::ensure_started_with_settings(store.app(), &settings).await?;
@@ -1890,7 +1902,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_app_state, get_story, get_settings, save_settings, clear_llm_api_key, create_story, generate_next_chapter, extract_scenes, build_scene_prompt, queue_scene_image, get_scene_image, build_comfyui_workflow, test_private_web_research, registry::ensure_registry, registry::get_registry_status, registry::get_registry_models])
+        .invoke_handler(tauri::generate_handler![get_app_state, get_story, get_settings, save_settings, clear_llm_api_key, create_story, generate_next_chapter, extract_scenes, build_scene_prompt, queue_scene_image, get_scene_image, build_comfyui_workflow, test_private_web_research, get_service_status, registry::ensure_registry, registry::get_registry_status, registry::get_registry_models])
         .run(tauri::generate_context!())
         .expect("error while running Raphael Story Generator");
 }
