@@ -38,20 +38,12 @@ pub async fn probe(registry: &RegistryState, settings: &AppSettings) -> ServiceS
         detail: registry_status.detail,
     };
 
-    let searxng = if !settings.web_research_enabled {
-        ServiceStatusDto {
-            service: "searxng".into(),
-            status: ServiceHealthStatus::Disabled,
-            url: settings.web_search_url.clone(),
-            detail: Some("Private web research is disabled in settings.".into()),
-        }
-    } else {
-        match research::check_search_api(settings).await {
+    let searxng = match research::check_search_api(settings).await {
             Ok(()) => ServiceStatusDto {
                 service: "searxng".into(),
                 status: ServiceHealthStatus::Online,
                 url: settings.web_search_url.clone(),
-                detail: Some("SearXNG search API responded successfully.".into()),
+                detail: Some(if settings.web_research_enabled { "SearXNG search API responded successfully.".into() } else { "SearXNG API is online; private research is disabled in settings.".into() }),
             },
             Err(error) => ServiceStatusDto {
                 service: "searxng".into(),
@@ -59,7 +51,6 @@ pub async fn probe(registry: &RegistryState, settings: &AppSettings) -> ServiceS
                 url: settings.web_search_url.clone(),
                 detail: Some(error.to_string()),
             },
-        }
     };
 
     let comfyui = match comfyui::check_api(&settings.comfyui_url).await {
