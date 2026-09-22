@@ -261,25 +261,74 @@ pub async fn check_search_api(settings: &AppSettings) -> AppResult<()> {
     }
     serde_json::from_str::<SearxResponse>(&body).map(|_| ()).map_err(|error| AppError::WebResearch(format!("SearXNG health response was not valid search JSON: {error}")))
 }
-async fn search(settings: &AppSettings, query: &str) -> AppResult<Vec<SearxResult>> {
+fn normalized_search_query(query: &str) -> String {
+    query.split_whitespace().collect::<Vec<_>>().join(" ").trim().to_string()
+}
+
+fn compact_search_query(query: &str) -> String {
+    const STOP_WORDS: &[&str] = &[
+        "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "have",
+        "how", "i", "in", "into", "is", "it", "its", "me", "my", "of", "on", "or", "our",
+        "please", "story", "that", "the", "their", "this", "to", "use", "want", "we",
+        "what", "when", "where", "which", "with", "write", "you", "your",
+    ];
+
+    let mut terms = Vec::new();
+    for raw in query.split(|c: char| !c.is_alphanumeric()) {
+        let term = raw.trim().to_ascii_lowercase();
+        if term.len() < 3 || STOP_WORDS.contains(&term.as_str()) || terms.contains(&term) {
+            continue;
+        }
+
+        terms.push(term);
+        if terms.len() >= 18 {
+            break;
+        }
+    }
+
+    terms.join(" ")
+}
+
+async fn search_once(
+    settings: &AppSettings,
+    query: &str,
+    method: SearchRequestMethod,
+) -> AppResult<Vec<SearxResult>> {
     let base = ensure_local_endpoint(settings.web_search_url.trim(), "web search")?;
     let url = base
         .join("search")
         .map_err(|error| AppError::WebResearch(format!("invalid SearXNG search URL: {error}")))?;
 
     let client = build_local_client(Duration::from_secs(20))?;
-    let response = client
-        .post(url)
-        .form(&[
-            ("q", query),
-            ("format", "json"),
-            ("language", "en"),
-            ("categories", "general"),
-            ("safesearch", "1"),
-        ])
-        .send()
-        .await
-        .map_err(|error| AppError::WebResearch(format!("private web search failed: {error}")))?;
+    let response = match method {
+        SearchRequestMethod::Post => {
+            client
+                .post(url)
+                .form(&[
+                    ("q", query),
+                    ("format", "json"),
+                    ("language", "en"),
+                    ("categories", "general"),
+                    ("safesearch", "1"),
+                ])
+                .send()
+                .await
+        }
+        SearchRequestMethod::Get => {
+            client
+                .get(url)
+                .query(&[
+                    ("q", query),
+                    ("format", "json"),
+                    ("language", "en"),
+                    ("categories", "general"),
+                    ("safesearch", "1"),
+                ])
+                .send()
+                .await
+        }
+    }
+    .map_err(|error| AppError::WebResearch(format!("private web search failed: {error}")))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -295,6 +344,58 @@ async fn search(settings: &AppSettings, query: &str) -> AppResult<Vec<SearxResul
         .await
         .map(|result| result.results)
         .map_err(|error| AppError::WebResearch(format!("invalid SearXNG JSON response: {error}")))
+}
+
+#[derive(Clone, Copy)]
+enum SearchRequestMethod {
+    Post,
+    Get,
+}
+
+async fn search(settings: &AppSettings, query: &str) -> AppResult<Vec<SearxResult>> {
+    let normalized = normalized_search_query(query);
+    if normalized.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let compact = compact_search_query(&normalized);
+    let mut candidates = vec![normalized.clone()];
+    if !compact.is_empty() && compact != normalized {
+        candidates.push(compact.clone());
+    }
+
+    let mut last_error = None;
+
+    for candidate in &candidates {
+        match search_once(settings, candidate, SearchRequestMethod::Post).await {
+            Ok(results) if !results.is_empty() => return Ok(results),
+            Ok(_) => {}
+            Err(error) => last_error = Some(error),
+        }
+
+        match search_once(settings, candidate, SearchRequestMethod::Get).await {
+            Ok(results) if !results.is_empty() => return Ok(results),
+            Ok(_) => {}
+            Err(error) => last_error = Some(error),
+        }
+    }
+
+    if let Some(error) = last_error {
+        return Err(error);
+    }
+
+    let tried = candidates
+        .iter()
+        .map(|candidate| {
+            let preview = candidate.chars().take(180).collect::<String>();
+            format!("'{preview}'")
+        })
+        .collect::<Vec<_>>()
+        .join(" then ");
+
+    Err(AppError::WebResearch(format!(
+        "private web search returned no results after trying the original and compact query forms: {tried}"
+    )))
 }
 
 async fn fetch_source(
