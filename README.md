@@ -185,3 +185,6 @@ SearXNG remains health-checked even when research is disabled, so the service pa
 
 
 Feature-branch CI runs use the same concurrency group as pull-request runs, so the latest verification is the authoritative run instead of accumulating duplicate builds.
+
+
+All actionable UI controls are rendered as semantic buttons, with runtime errors exposed through visible alert/error surfaces.
