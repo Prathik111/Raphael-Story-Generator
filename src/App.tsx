@@ -75,7 +75,7 @@ function RegistryPanel({ status, catalog, error }: { status: RegistryStatusDto; 
         <div className="section-head">MODEL REGISTRY</div>
         <span className="tiny">{status.url}</span>
       </div>
-      <span className={\`registry-state \${status.status}\`}><i />{statusLabel}</span>
+      <span className={`registry-state ${status.status}`}><i />{statusLabel}</span>
     </div>
     {status.status === 'on' ? <>
       <div className="registry-counts">
