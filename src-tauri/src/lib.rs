@@ -18,6 +18,8 @@ enum AppError {
     Storage(String),
     #[error("ComfyUI error: {0}")]
     ComfyUi(String),
+    #[error("Registry error: {0}")]
+    Registry(String),
 }
 impl serde::Serialize for AppError {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: serde::Serializer {
@@ -838,13 +840,15 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            let registry = registry::RegistryState::new(app.handle());
+            app.manage(registry);
             let store = Store::new(app.handle()).map_err(|e| {
                 std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
             })?;
             app.manage(store);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_app_state, get_story, get_settings, save_settings, create_story, generate_next_chapter, extract_scenes, build_scene_prompt, queue_scene_image])
+        .invoke_handler(tauri::generate_handler![get_app_state, get_story, get_settings, save_settings, create_story, generate_next_chapter, extract_scenes, build_scene_prompt, queue_scene_image, registry::ensure_registry, registry::get_registry_status, registry::get_registry_models])
         .run(tauri::generate_context!())
         .expect("error while running Raphael Story Generator");
 }
