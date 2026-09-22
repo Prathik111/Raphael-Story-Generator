@@ -241,13 +241,18 @@ pub async fn check_search_api(settings: &AppSettings) -> AppResult<()> {
     let base = ensure_local_endpoint(settings.web_search_url.trim(), "web search")?;
     let url = base.join("search").map_err(|error| AppError::WebResearch(format!("invalid SearXNG search URL: {error}")))?;
     let client = build_local_client(Duration::from_secs(8))?;
-    let response = client.get(url).query(&[
-        ("q", "raphael-health-check"),
-        ("format", "json"),
-        ("language", "en"),
-        ("categories", "general"),
-        ("safesearch", "1"),
-    ]).send().await.map_err(|error| AppError::WebResearch(format!("SearXNG API health check failed: {error}")))?;
+    let response = client
+        .post(url)
+        .form(&[
+            ("q", "raphael-health-check"),
+            ("format", "json"),
+            ("language", "en"),
+            ("categories", "general"),
+            ("safesearch", "1"),
+        ])
+        .send()
+        .await
+        .map_err(|error| AppError::WebResearch(format!("SearXNG API health check failed: {error}")))?;
     let status = response.status();
     let body = response.text().await.map_err(|error| AppError::WebResearch(format!("failed to read SearXNG health response: {error}")))?;
     if !status.is_success() {
