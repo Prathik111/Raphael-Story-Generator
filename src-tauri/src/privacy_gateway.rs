@@ -186,7 +186,7 @@ pub async fn ensure_started_with_settings(app: &AppHandle, settings: &crate::App
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
-        let result = timeout(STARTUP_TIMEOUT, async {
+        let result: AppResult<()> = timeout(STARTUP_TIMEOUT, async {
             loop {
                 if research::check_private_search(settings).await.is_ok() {
                     return Ok(());
