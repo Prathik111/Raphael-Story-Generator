@@ -18,7 +18,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 directories = "6"
-registry-client = { git = "https://github.com/Prathik111/Raphael-Model-Registry.git", rev = "dfa9df1bbce71d0e18892127da94920fbe5aab70", package = "registry-client" }
+registry-client = { git = "https://github.com/Prathik111/Raphael-Model-Registry.git", rev = "5c1f591961fb6fbee92abae36cd88848282306e9", package = "registry-client" }
 registry-core = { git = "https://github.com/Prathik111/Raphael-Model-Registry.git", rev = "dfa9df1bbce71d0e18892127da94920fbe5aab70", package = "registry-core" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 thiserror = "2"
