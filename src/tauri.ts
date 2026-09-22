@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { AppSettings, AppState, ComfyGenerationEvent, LlmGenerationEvent, PipelineEvent, RegistryCatalog, RegistryStatusDto, SceneExtractionResult, ServiceStatusBoard, Story, StoryVisualSetup } from './types';
+import type { WorkflowBuildResult, WorkflowLoraInput } from './types';
 
 export const isWebApp = typeof window !== 'undefined' && !(window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 
@@ -41,6 +42,8 @@ export const api = {
   getRegistryStatus: () => command<RegistryStatusDto>('get_registry_status'),
   getRegistryModels: () => command<RegistryCatalog>('get_registry_models'),
   getServiceStatus: () => command<ServiceStatusBoard>('get_service_status'),
+  buildComfyUiWorkflow: (workflow: unknown, loraStack: WorkflowLoraInput[], checkpointNode: string | null, imageWidth: number, imageHeight: number) =>
+    command<WorkflowBuildResult>('build_comfyui_workflow', { workflow, loraStack, checkpointNode, imageWidth, imageHeight }),
   testPrivateWebResearch: () => command<string>('test_private_web_research'),
   getSceneImage: (storyId: string, chapterNumber: number, sceneId: string) =>
     command<string | null>('get_scene_image', { storyId, chapterNumber, sceneId }),
