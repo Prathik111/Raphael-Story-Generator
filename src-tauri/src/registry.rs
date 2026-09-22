@@ -46,7 +46,6 @@ pub struct RegistryModelDto {
 #[derive(Debug, Clone)]
 pub struct RegistryModelArtifact {
     pub id: String,
-    pub name: String,
     pub file_name: String,
     pub activation_prompts: Vec<String>,
 }
@@ -361,7 +360,6 @@ impl RegistryState {
 
         Ok(RegistryModelArtifact {
             id: model.id,
-            name: model.name,
             file_name: file.filename,
             activation_prompts,
         })
