@@ -43,7 +43,7 @@ function NewStoryPanel({ busy, prompt, setPrompt, onGenerate }: { busy: boolean;
 function RegistryPanel({ status, catalog, error }: { status: RegistryStatusDto; catalog: RegistryCatalog; error: string | null }) {
   const statusLabel = status.status === 'on' ? 'ON' : status.status === 'starting' ? 'STARTING' : 'OFF';
   const renderModelList = (models: RegistryCatalog['checkpoints']) => models.slice(0, 6).map(model => (
-    <div className="registry-model" key={model.id} title={model.base_model ? \`\${model.name} · \${model.base_model}\` : model.name}>
+    <div className="registry-model" key={model.id} title={model.base_model ? `${model.name} · ${model.base_model}` : model.name}>
       <span>{model.name}</span>
       <small>{model.base_model || 'BASE UNKNOWN'}</small>
     </div>
