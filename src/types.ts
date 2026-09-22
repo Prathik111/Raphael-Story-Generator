@@ -92,6 +92,8 @@ export interface Scene {
   image_path: string | null;
   image_mime: string | null;
   image_error: string | null;
+  image_width: number;
+  image_height: number;
   comfy_prompt_id: string | null;
 }
 
@@ -182,6 +184,7 @@ export interface CommandResult {
 
 
 export type RegistryStatus = 'off' | 'starting' | 'on';
+export type ServiceHealthStatus = 'online' | 'offline' | 'disabled';
 
 export interface RegistryStatusDto {
   status: RegistryStatus;
@@ -203,6 +206,19 @@ export interface RegistryCatalog {
   checkpoint_total: number;
   loras: RegistryModel[];
   lora_total: number;
+}
+
+export interface ServiceStatusDto {
+  service: 'registry' | 'searxng' | 'comfyui';
+  status: ServiceHealthStatus;
+  url: string;
+  detail: string | null;
+}
+
+export interface ServiceStatusBoard {
+  registry: ServiceStatusDto;
+  searxng: ServiceStatusDto;
+  comfyui: ServiceStatusDto;
 }
 
 export interface StoryVisualSetup {
