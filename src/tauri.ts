@@ -37,4 +37,5 @@ export const api = {
   ensureRegistry: () => command<RegistryStatusDto>('ensure_registry'),
   getRegistryStatus: () => command<RegistryStatusDto>('get_registry_status'),
   getRegistryModels: () => command<RegistryCatalog>('get_registry_models'),
+  testPrivateWebResearch: () => command<string>('test_private_web_research'),
 };
