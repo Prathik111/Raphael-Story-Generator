@@ -88,6 +88,8 @@ Rules for the positive prompt:
 - Favor concrete visual language and concise comma-separated prompt phrases. Do not write a story, explanation, or prose paragraph.
 - Do not invent unsupported character traits, costumes, props, locations, or LoRA capabilities.
 - Do not output LoRA filenames, model IDs, registry IDs, or internal metadata unless they are themselves part of an activation prompt.
+- Choose exactly one approved image size based on the scene composition: square for balanced compositions, landscape for wide environmental/action scenes, portrait for character-focused/tall compositions.
+- Return image_width and image_height as numeric values. Use only these approved pairs: 512x512, 768x768, 1024x1024, 1216x832, 832x1216, 1344x768, 768x1344, 1536x864, 864x1536.
 
 Rules for the negative prompt:
 - Describe unwanted visual results that should be suppressed: identity drift, incorrect appearance/clothing, extra or missing limbs, malformed hands/fingers, anatomy errors, duplicate subjects, bad proportions, deformed faces, blur, low detail, noise, compression artifacts, text, watermark, logo, signature, UI elements, cropped subjects, and scene contradictions.
@@ -99,6 +101,8 @@ Output rules:
 - Return ONLY valid JSON matching the exact schema.
 - Do not wrap the JSON in Markdown fences.
 - Do not add commentary before or after the JSON."#;
+
+fn default_image_dimension() -> u32 { 1024 }
 
 fn default_web_research_enabled() -> bool { true }
 fn default_web_search_url() -> String { "http://127.0.0.1:8080".into() }
@@ -262,6 +266,10 @@ pub struct Scene {
     pub image_mime: Option<String>,
     #[serde(default)]
     pub image_error: Option<String>,
+    #[serde(default = "default_image_dimension")]
+    pub image_width: u32,
+    #[serde(default = "default_image_dimension")]
+    pub image_height: u32,
     pub comfy_prompt_id: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -386,8 +394,32 @@ struct SceneDraft {
 }
 #[derive(Debug, Deserialize)]
 struct SceneResponse { scenes: Vec<SceneDraft> }
-#[derive(Debug, Deserialize)]
-struct ImagePromptResponse { positive_prompt: String, negative_prompt: String }
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct ImagePromptResponse {
+    positive_prompt: String,
+    negative_prompt: String,
+    image_width: u32,
+    image_height: u32,
+}
+
+fn normalize_image_size(width: u32, height: u32) -> AppResult<(u32, u32)> {
+    const ALLOWED: &[(u32, u32)] = &[
+        (512, 512), (768, 768), (1024, 1024),
+        (1216, 832), (832, 1216), (1344, 768), (768, 1344),
+        (1536, 864), (864, 1536),
+    ];
+    if ALLOWED.contains(&(width, height)) {
+        Ok((width, height))
+    } else {
+        Err(AppError::ModelResponse(format!(
+            "LLM selected unsupported image size {}x{}; allowed sizes: {}",
+            width,
+            height,
+            ALLOWED.iter().map(|(w, h)| format!("{}x{}", w, h)).collect::<Vec<_>>().join(", "),
+        )))
+    }
+}
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(default)]
@@ -1440,7 +1472,7 @@ async fn build_scene_prompt(
     };
 
     let system = settings.image_prompt_generator_system_prompt.as_str();
-    let schema = r#"{"positive_prompt":"","negative_prompt":""}"#;
+    let schema = r#"{"positive_prompt":"","negative_prompt":"","image_width":1024,"image_height":1024}"#;
     let user = format!("STORY: {}
 SCENE: {}
 LOCATION: {}
@@ -1480,6 +1512,10 @@ Return:
     emit_pipeline(store.app(), "image_prompt_generator", "started", format!("Generating positive/negative prompts for {}", scene.id));
     let raw = chat(store.app(), &settings, "image_prompt_generator", system, &user).await?;
     let parsed: ImagePromptResponse = serde_json::from_str(clean_json(&raw)).map_err(|e| AppError::ModelResponse(format!("{}; raw model output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
+    let (image_width, image_height) = normalize_image_size(
+        if parsed.image_width == 0 { 1024 } else { parsed.image_width },
+        if parsed.image_height == 0 { 1024 } else { parsed.image_height },
+    )?;
     let chapter_mut = story.chapters.iter_mut().find(|c| c.number == chapter_number)
         .ok_or_else(|| AppError::ModelResponse("chapter disappeared while saving scene prompt".into()))?;
     let scene_mut = chapter_mut.scenes.iter_mut().find(|s| s.id == scene_id)
@@ -1500,6 +1536,9 @@ Return:
     scene_mut.selected_loras = selected_loras;
     scene_mut.positive_prompt = positive_prompt;
     scene_mut.negative_prompt = parsed.negative_prompt.trim().to_string();
+    scene_mut.image_width = image_width;
+    scene_mut.image_height = image_height;
+    scene_mut.image_error = None;
     scene_mut.image_status = "prompt_ready".into();
     story.updated_at = now(); write_story(&store, story)
 }
@@ -1686,11 +1725,15 @@ fn build_comfyui_workflow(
     workflow: Value,
     lora_stack: Vec<workflow_builder::WorkflowLoraInput>,
     checkpoint_node: Option<String>,
+    image_width: u32,
+    image_height: u32,
 ) -> AppResult<workflow_builder::WorkflowBuildResult> {
     workflow_builder::build_workflow(workflow_builder::WorkflowBuildRequest {
         workflow,
         lora_stack,
         checkpoint_node,
+        image_width,
+        image_height,
     })
 }
 
@@ -1709,6 +1752,8 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
     if scene.positive_prompt.trim().is_empty() {
         return Err(AppError::ComfyUi("build the scene prompt before queuing the image".into()));
     }
+    let image_width = scene.image_width;
+    let image_height = scene.image_height;
     let mut workflow: Value = serde_json::from_str(&settings.comfyui_workflow_json)
         .map_err(|e| AppError::ComfyUi(format!("workflow JSON is invalid: {e}")))?;
     let seed = (Uuid::new_v4().as_u128() & u64::MAX as u128) as u64;
@@ -1762,6 +1807,8 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
         workflow,
         lora_stack,
         checkpoint_node: None,
+        image_width,
+        image_height,
     })?;
     let workflow = built.workflow;
     emit_pipeline(store.app(), "workflow_builder", "completed", format!("Created {} LoRA loader node(s)", built.lora_node_ids.len()));
