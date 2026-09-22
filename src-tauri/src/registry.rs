@@ -43,6 +43,23 @@ pub struct RegistryModelDto {
     pub revision: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct RegistryModelArtifact {
+    pub id: String,
+    pub name: String,
+    pub file_name: String,
+    pub activation_prompts: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RegistryLoraCandidate {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub base_model: Option<String>,
+    pub creator: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RegistryCatalogDto {
     pub checkpoints: Vec<RegistryModelDto>,
@@ -259,6 +276,58 @@ impl RegistryState {
             checkpoints: checkpoint_result.items.into_iter().map(RegistryModelDto::from_model).collect(),
             lora_total: lora_result.total,
             loras: lora_result.items.into_iter().map(RegistryModelDto::from_model).collect(),
+        })
+    }
+}
+
+impl RegistryState {
+    pub async fn compatible_loras(&self, checkpoint_id: &str) -> AppResult<Vec<RegistryLoraCandidate>> {
+        let client = self.client().await?;
+        let models = client
+            .compatible(checkpoint_id, Some(ModelType::Lora))
+            .await
+            .map_err(|error| AppError::Registry(format!("failed to load compatible LoRAs: {error}")))?;
+
+        Ok(models.into_iter().map(|model| RegistryLoraCandidate {
+            id: model.id,
+            name: model.name,
+            description: model.description,
+            base_model: model.base_model,
+            creator: model.creator,
+        }).collect())
+    }
+
+    pub async fn model_artifact(&self, model_id: &str) -> AppResult<RegistryModelArtifact> {
+        let client = self.client().await?;
+        let model = client
+            .get(model_id)
+            .await
+            .map_err(|error| AppError::Registry(format!("failed to load model {model_id}: {error}")))?;
+        let files = client
+            .files(model_id)
+            .await
+            .map_err(|error| AppError::Registry(format!("failed to load files for {}: {error}", model.name)))?;
+        let file = files
+            .into_iter()
+            .filter(|file| matches!(file.status, registry_core::FileStatus::Available))
+            .max_by_key(|file| file.updated_at)
+            .ok_or_else(|| AppError::Registry(format!("model '{}' has no available file", model.name)))?;
+
+        let versions = client
+            .versions(model_id)
+            .await
+            .map_err(|error| AppError::Registry(format!("failed to load versions for {}: {error}", model.name)))?;
+        let activation_prompts = versions
+            .into_iter()
+            .max_by_key(|version| version.updated_at)
+            .map(|version| version.activation_prompts)
+            .unwrap_or_default();
+
+        Ok(RegistryModelArtifact {
+            id: model.id,
+            name: model.name,
+            file_name: file.filename,
+            activation_prompts,
         })
     }
 }
