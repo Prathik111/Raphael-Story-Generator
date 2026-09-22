@@ -561,7 +561,7 @@ async fn chat(
             emit_llm(app, LlmGenerationEvent {
                 generation_id: generation_id.clone(), stage: stage.into(), status: "token".into(),
                 model: settings.llm_model.trim().into(), system_prompt: None, user_prompt: None,
-                delta: Some(text.into()), response: Some(full_response.clone()), error: None,
+                delta: Some(text.into()), response: None, error: None,
             });
         }
     } else {
@@ -603,7 +603,7 @@ async fn chat(
                 emit_llm(app, LlmGenerationEvent {
                     generation_id: generation_id.clone(), stage: stage.into(), status: "token".into(),
                     model: settings.llm_model.trim().into(), system_prompt: None, user_prompt: None,
-                    delta: Some(delta.to_string()), response: Some(full_response.clone()), error: None,
+                    delta: Some(delta.to_string()), response: None, error: None,
                 });
             }
         }
@@ -1428,6 +1428,7 @@ Return:
         });
     }
 
+    emit_pipeline(app, "lora_selection", "completed", format!("Selected {} dynamic LoRA(s)", result.len()));
     Ok(result)
 }
 
