@@ -1141,7 +1141,6 @@ async fn create_story(
     };
     let style_artifacts = visual_config.style_loras.iter().map(|item| registry::RegistryModelArtifact {
         id: item.id.clone(),
-        name: item.name.clone(),
         file_name: item.file_name.clone(),
         activation_prompts: item.activation_prompts.clone(),
     }).collect::<Vec<_>>();
