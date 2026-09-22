@@ -259,7 +259,14 @@ pub async fn check_search_api(settings: &AppSettings) -> AppResult<()> {
     if !status.is_success() {
         return Err(AppError::WebResearch(format!("SearXNG health check returned HTTP {}: {}", status, body.chars().take(300).collect::<String>())));
     }
-    serde_json::from_str::<SearxResponse>(&body).map(|_| ()).map_err(|error| AppError::WebResearch(format!("SearXNG health response was not valid search JSON: {error}")))
+    let parsed = serde_json::from_str::<SearxResponse>(&body)
+        .map_err(|error| AppError::WebResearch(format!("SearXNG health response was not valid search JSON: {error}")))?;
+    if parsed.results.is_empty() {
+        return Err(AppError::WebResearch(
+            "SearXNG is reachable and returned valid JSON, but the health-check search produced no results; check enabled engines, engine suspension, and Tor connectivity".into(),
+        ));
+    }
+    Ok(())
 }
 fn normalized_search_query(query: &str) -> String {
     query.split_whitespace().collect::<Vec<_>>().join(" ").trim().to_string()
@@ -565,38 +572,29 @@ fn evidence_tokens(value: &str) -> Vec<String> {
         .collect()
 }
 
+fn normalized_evidence_text(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c.is_whitespace() { c.to_ascii_lowercase() } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn evidence_supported(evidence: &str, source: &ResearchSource) -> bool {
-    let evidence_token_list = evidence_tokens(evidence);
-    if evidence_token_list.len() < 6 {
+    let evidence = normalized_evidence_text(evidence);
+    if evidence.split_whitespace().count() < 6 {
         return false;
     }
 
-    let content_tokens = evidence_tokens(&source.content);
-    if content_tokens.len() < evidence_token_list.len() {
-        return false;
-    }
-
-    if content_tokens
-        .windows(evidence_token_list.len())
-        .any(|window| window == evidence_token_list.as_slice())
-    {
-        return true;
-    }
-
-    let minimum_overlap = evidence_token_list.len().saturating_mul(75).div_ceil(100);
-    let window_radius = 4usize;
-    let min_window = evidence_token_list.len().saturating_sub(window_radius).max(6);
-    let max_window = (evidence_token_list.len() + window_radius).min(content_tokens.len());
-
-    for size in min_window..=max_window {
-        for window in content_tokens.windows(size) {
-            let overlap = evidence_token_list
-                .iter()
-                .filter(|token| window.iter().any(|value| value == *token))
-                .count();
-            if overlap >= minimum_overlap {
-                return true;
-            }
+    for candidate in [&source.content, &source.snippet] {
+        let candidate = normalized_evidence_text(candidate);
+        if candidate.is_empty() {
+            continue;
+        }
+        if candidate.contains(&evidence) {
+            return true;
         }
     }
 
@@ -632,7 +630,13 @@ pub fn story_architect_context(bundle: &ResearchBundle) -> String {
     let sources = bundle
         .sources
         .iter()
-        .map(|source| format!("[{}] {} — {}", source.id, source.title, source.url))
+        .map(|source| {
+            format!(
+                "[{}] {} — {}
+SEARCH SNIPPET: {}",
+                source.id, source.title, source.url, source.snippet
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -693,7 +697,7 @@ pub async fn research_web(
     let client = build_client(settings, Duration::from_secs(30))?;
     let mut sources = Vec::new();
 
-    for result in results.into_iter().take(max_results) {
+    for (result_index, result) in results.into_iter().take(max_results).enumerate() {
         let source_id = format!("S{}", sources.len() + 1);
         let source_hint = result.title.trim();
         emit_pipeline(
@@ -710,24 +714,47 @@ pub async fn research_web(
             ),
         );
 
-        let Ok(url) = validate_source_url(&result.url) else {
-            emit_pipeline(
-                app,
-                "web_fetch",
-                "skipped",
-                format!("{source_id} was rejected because its URL is not an allowed public HTTP(S) source"),
-            );
-            continue;
+        let url = match validate_source_url(&result.url) {
+            Ok(url) => url,
+            Err(error) => {
+                let snippet = trim_chars(&result.content, 1_500);
+                if !snippet.trim().is_empty() {
+                    sources.push(ResearchSource {
+                        id: source_id.clone(),
+                        title: result.title.trim().to_string(),
+                        url: result.url.trim().to_string(),
+                        snippet,
+                        content: String::new(),
+                    });
+                }
+                emit_pipeline(
+                    app,
+                    "web_fetch",
+                    "skipped",
+                    format!("{source_id} was rejected because its URL is not an allowed public HTTP(S) source: {error}"),
+                );
+                continue;
+            }
         };
 
         let fetched = match fetch_source(&client, url, max_chars).await {
             Ok(value) => value,
             Err(error) => {
+                let snippet = trim_chars(&result.content, 1_500);
+                if !snippet.trim().is_empty() {
+                    sources.push(ResearchSource {
+                        id: source_id.clone(),
+                        title: result.title.trim().to_string(),
+                        url: result.url.trim().to_string(),
+                        snippet,
+                        content: String::new(),
+                    });
+                }
                 emit_pipeline(
                     app,
                     "web_fetch",
                     "skipped",
-                    format!("{source_id} could not be fetched: {error}"),
+                    format!("{source_id} could not be fetched; retaining its SearXNG snippet as a degraded research source: {error}"),
                 );
                 continue;
             }
@@ -735,12 +762,29 @@ pub async fn research_web(
 
         let (resolved_url, content) = fetched;
         if content.trim().len() < 120 {
-            emit_pipeline(
-                app,
-                "web_fetch",
-                "skipped",
-                format!("{source_id} was fetched but contained too little readable text"),
-            );
+            let snippet = trim_chars(&result.content, 1_500);
+            if !snippet.trim().is_empty() {
+                sources.push(ResearchSource {
+                    id: source_id.clone(),
+                    title: result.title.trim().to_string(),
+                    url: resolved_url.to_string(),
+                    snippet,
+                    content: String::new(),
+                });
+                emit_pipeline(
+                    app,
+                    "web_fetch",
+                    "skipped",
+                    format!("{source_id} contained too little readable page text; retaining its SearXNG snippet"),
+                );
+            } else {
+                emit_pipeline(
+                    app,
+                    "web_fetch",
+                    "skipped",
+                    format!("{source_id} was fetched but contained too little readable text and no usable search snippet"),
+                );
+            }
             continue;
         }
 
@@ -761,17 +805,24 @@ pub async fn research_web(
 
     if sources.is_empty() {
         let error = AppError::WebResearch(
-            "private search found results, but no source pages could be safely fetched".into(),
+            "SearXNG returned results, but none contained a usable URL or search snippet".into(),
         );
         emit_pipeline(app, "web_research", "error", error.to_string());
         return Err(error);
     }
 
+    let fetched_count = sources.iter().filter(|source| !source.content.trim().is_empty()).count();
+    let snippet_only_count = sources.len().saturating_sub(fetched_count);
     emit_pipeline(
         app,
         "web_fetch",
         "completed",
-        format!("Fetched {} readable source page(s)", sources.len()),
+        format!(
+            "Prepared {} usable research source(s): {} full page(s), {} SearXNG snippet fallback(s)",
+            sources.len(),
+            fetched_count,
+            snippet_only_count
+        ),
     );
     emit_pipeline(
         app,
@@ -841,23 +892,27 @@ pub async fn research_web(
     }
 
     if facts.is_empty() {
-        let error = AppError::WebResearch(format!(
-            "research extractor returned {candidate_fact_count} candidate fact(s), but none passed source-ID and evidence validation; the extractor must use valid S# IDs and quote evidence verbatim from fetched source text"
-        ));
-        emit_pipeline(app, "web_research_extractor", "error", error.to_string());
-        return Err(error);
+        emit_pipeline(
+            app,
+            "web_research_extractor",
+            "completed",
+            format!(
+                "No validated facts were extracted from {} candidate fact(s); preserving the usable research sources for the Story Architect",
+                candidate_fact_count
+            ),
+        );
+    } else {
+        emit_pipeline(
+            app,
+            "web_research_extractor",
+            "completed",
+            format!(
+                "Validated {} source-backed fact(s) from {} candidate fact(s)",
+                facts.len(),
+                candidate_fact_count
+            ),
+        );
     }
-
-    emit_pipeline(
-        app,
-        "web_research_extractor",
-        "completed",
-        format!(
-            "Validated {} source-backed fact(s) from {} candidate fact(s)",
-            facts.len(),
-            candidate_fact_count
-        ),
-    );
 
     Ok(ResearchBundle {
         queries: vec![query.to_string()],
