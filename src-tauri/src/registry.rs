@@ -320,6 +320,15 @@ impl RegistryState {
         Ok(candidates)
     }
 
+    pub async fn compatible_lora_models(&self, checkpoint_id: &str) -> AppResult<Vec<RegistryModelDto>> {
+        let client = self.client().await?;
+        let models = client
+            .compatible(checkpoint_id, Some(ModelType::Lora))
+            .await
+            .map_err(|error| AppError::Registry(format!("failed to load compatible LoRAs: {error}")))?;
+        Ok(models.into_iter().map(RegistryModelDto::from_model).collect())
+    }
+
     pub async fn model_artifact(&self, model_id: &str) -> AppResult<RegistryModelArtifact> {
         let client = self.client().await?;
         let model = client
