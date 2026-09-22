@@ -108,6 +108,12 @@ fn ws_url(raw: &str, client_id: &str) -> AppResult<Url> {
     Ok(url)
 }
 
+fn resumable_prompt_id(scene: &crate::Scene) -> Option<String> {
+    (scene.image_status == "queued")
+        .then(|| scene.comfy_prompt_id.clone())
+        .flatten()
+}
+
 async fn fetch_history(client: &Client, base: &Url, prompt_id: &str) -> AppResult<Option<Value>> {
     let url = base.join(&format!("history/{prompt_id}"))
         .map_err(|e| AppError::ComfyUi(format!("invalid ComfyUI history URL: {e}")))?;
@@ -388,8 +394,8 @@ pub fn resume_queued_generations(app: &AppHandle, base_url: &str) {
     let store = app.state::<Store>();
     let jobs = store.data.read().ok().map(|data| {
         data.stories.values().flat_map(|story| story.chapters.iter().flat_map(|chapter| chapter.scenes.iter().filter_map(|scene| {
-            if scene.image_status == "queued" { scene.comfy_prompt_id.as_ref().map(|prompt_id| (story.id.clone(), chapter.number, scene.id.clone(), prompt_id.clone())) } else { None }
-        }))).collect::<Vec<_>>()
+            resumable_prompt_id(scene).map(|prompt_id| (story.id.clone(), chapter.number, scene.id.clone(), prompt_id))
+        })).collect::<Vec<_>>()()
     }).unwrap_or_default();
 
     for (story_id, chapter_number, scene_id, prompt_id) in jobs {
@@ -421,5 +427,19 @@ mod tests {
     fn ws_urls_follow_http_scheme() {
         let url = ws_url("http://127.0.0.1:8188", "client").unwrap();
         assert_eq!(url.as_str(), "ws://127.0.0.1:8188/ws?clientId=client");
+    }
+
+    #[test]
+    fn queued_scene_is_resumable_only_with_a_prompt_id() {
+        let mut scene = crate::Scene::default();
+        scene.image_status = "queued".into();
+
+        assert_eq!(resumable_prompt_id(&scene), None);
+
+        scene.comfy_prompt_id = Some("prompt-123".into());
+        assert_eq!(resumable_prompt_id(&scene).as_deref(), Some("prompt-123"));
+
+        scene.image_status = "generated".into();
+        assert_eq!(resumable_prompt_id(&scene), None);
     }
 }
