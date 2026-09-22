@@ -1,9 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, subscribeToComfy, subscribeToLlm, subscribeToPipeline } from './tauri';
-import type { AppSettings, AppState, Chapter, ComfyGenerationEvent, LlmGenerationEvent, PipelineEvent, RegistryCatalog, RegistryStatusDto, Scene, Story, StoryVisualSetup } from './types';
+import type { AppSettings, AppState, Chapter, ComfyGenerationEvent, LlmGenerationEvent, PipelineEvent, RegistryCatalog, RegistryStatusDto, Scene, ServiceStatusBoard, Story, StoryVisualSetup } from './types';
 
 function PulseMark() {
   return <div className="raphael-core" aria-label="Raphael"><span className="core-dot"/><i className="core-orbit orbit-a"/><i className="core-orbit orbit-b"/><i className="core-orbit orbit-c"/></div>;
+}
+
+
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object' && 'message' in error) return String((error as { message: unknown }).message);
+  try { return JSON.stringify(error); } catch { return 'Unexpected error'; }
 }
 
 function splitTags(values: string[]) { return values.filter(Boolean).slice(0, 12); }
@@ -57,6 +65,25 @@ function NewStoryPanel({
     </div>
     <textarea className="story-prompt" value={prompt} onChange={event => setPrompt(event.target.value)} placeholder="Example: A dark fantasy anime about a quiet academy student who discovers that the rival she dislikes is protecting a secret tied to her family..." disabled={busy} rows={6}/>
     <div className="hero-actions"><button className="primary-btn" onClick={onGenerate} disabled={busy || !prompt.trim() || !checkpointId || registryStatus.status !== 'on'}>{busy ? 'BUILDING STORY BIBLE…' : 'GENERATE STORY'}</button><span className="tiny">STYLE LOCKED · SCENE LORAS AUTO-SELECTED · REGISTRY-VALIDATED</span></div>
+  </section>;
+}
+
+function ServiceHealthPanel({ status, onRefresh, refreshing }: { status: ServiceStatusBoard; onRefresh: () => void; refreshing: boolean }) {
+  const items = [status.registry, status.searxng, status.comfyui];
+  const label = (value: ServiceStatusBoard['registry']['status']) => value.toUpperCase();
+  return <section className="hud-panel inspector-panel service-health-panel">
+    <div className="panel-title-row">
+      <div><div className="section-head">RAPHAEL SERVICES</div><span className="tiny">LIVE API HEALTH · POLLED FROM THE ACTUAL ENDPOINTS</span></div>
+      <button type="button" className="mini-btn" onClick={onRefresh} disabled={refreshing}>{refreshing ? 'CHECKING…' : 'RECHECK'}</button>
+    </div>
+    <div className="service-health-list">
+      {items.map(item => (
+        <div className="service-health-item" key={item.service} title={item.detail || item.url}>
+          <span className={'service-health-dot ' + item.status}><i /></span>
+          <div className="service-health-copy"><strong>{item.service.toUpperCase()}</strong><small>{label(item.status)} · {item.url}</small>{item.detail ? <em>{item.detail}</em> : null}</div>
+        </div>
+      ))}
+    </div>
   </section>;
 }
 
@@ -142,42 +169,54 @@ function IntroductionView({ story }: { story: Story }) {
   </section>;
 }
 
-function ResearchPanel({ story }: { story: Story }) {
+function ResearchPanel({ story, researchTrace }: { story: Story; researchTrace: GenerationTrace | null }) {
   const research = story.research;
   return <section className="hud-panel inspector-panel research-panel">
     <div className="panel-title-row">
       <div>
         <div className="section-head">PRIVATE WEB RESEARCH</div>
-        <span className="tiny">LOCAL SEARXNG · TOR · SOURCE-BACKED FACTS</span>
+        <span className="tiny">LIVE SEARXNG RESULTS · TOR FETCH · LLM EXTRACTION</span>
       </div>
-      <span className="status-chip">{research.sources.length} SOURCES</span>
+      <span className="status-chip">{research.sources.length} SOURCES · {research.facts.length} FACTS</span>
     </div>
-    {research.facts.length === 0 ? (
-      <div className="registry-empty">No external research facts were stored for this story.</div>
-    ) : (
-      <div className="research-facts">
-        {research.facts.slice(0, 8).map((fact, index) => (
-          <article className="research-fact" key={index}>
-            <strong>{fact.claim}</strong>
-            <small>{fact.source_ids.join(' · ')} · {fact.confidence.toUpperCase()}</small>
-            <p>{fact.evidence}</p>
+
+    {research.queries.length ? <div className="research-query-block">
+      <div className="section-head muted-head">SEARCH QUERIES</div>
+      <div className="tag-row">{research.queries.map(query => <span className="tag dim" key={query}>{query}</span>)}</div>
+    </div> : null}
+
+    {research.sources.length ? (
+      <div className="research-sources">
+        <div className="section-head muted-head">SEARCH RESULTS / FETCHED SOURCES</div>
+        {research.sources.slice(0, 10).map(source => (
+          <article className="research-source research-result" key={source.id}>
+            <div className="research-source-head"><span className="research-source-id">{source.id}</span><strong>{source.title || source.url}</strong></div>
+            <small>{source.url}</small>
+            {source.snippet ? <p className="research-snippet">{source.snippet}</p> : null}
           </article>
         ))}
       </div>
-    )}
-    {research.sources.length ? (
-      <div className="research-sources">
-        <div className="section-head muted-head">SOURCES</div>
-        {research.sources.slice(0, 8).map(source => (
-          <div className="research-source" key={source.id}>
-            <span className="research-source-id">{source.id}</span>
-            <div><strong>{source.title || source.url}</strong><small>{source.url}</small></div>
-          </div>
-        ))}
-      </div>
-    ) : null}
+    ) : <div className="registry-empty">No external research sources were returned.</div>}
+
+    <div className="research-facts">
+      <div className="section-head muted-head">SOURCE-BACKED FACTS</div>
+      {research.facts.length ? research.facts.slice(0, 10).map((fact, index) => (
+        <article className="research-fact" key={index}>
+          <strong>{fact.claim}</strong>
+          <small>{fact.source_ids.join(' · ')} · {fact.confidence.toUpperCase()}</small>
+          <p>{fact.evidence}</p>
+        </article>
+      )) : <div className="registry-empty">No supported facts were extracted.</div>}
+    </div>
+
+    {researchTrace ? <details className="research-llm-trace">
+      <summary><span className="section-head">RAW RESEARCH EXTRACTOR OUTPUT</span><span className="tiny">{researchTrace.status.toUpperCase()}</span></summary>
+      <pre className="trace-box response">{researchTrace.response || '(no response captured)'}</pre>
+      {researchTrace.error ? <div className="error-box">{researchTrace.error}</div> : null}
+    </details> : null}
   </section>;
 }
+
 
 function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPrompt, onViewPrompt, onQueueImage, buildingPrompt, queueing, progress, images }: { story: Story; chapter: Chapter; onExtractScenes: () => void; extracting: boolean; onBuildPrompt: (scene: Scene) => void; onViewPrompt: (scene: Scene) => void; onQueueImage: (scene: Scene) => void; buildingPrompt: string | null; queueing: string | null; progress: Record<string, ComfyGenerationEvent>; images: Record<string, string>; }) {
   return <div className="chapter-view">
@@ -201,6 +240,7 @@ function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPromp
         <div className="scene-index">SCENE {String(scene.order).padStart(2, '0')}</div><h3>{scene.description}</h3>
         <div className="scene-meta"><span>{scene.location || 'UNKNOWN LOCATION'}</span><span>{scene.time || 'TIME UNSPECIFIED'}</span></div>
         <p className="scene-action">{scene.action}</p>
+        <div className="scene-image-size">OUTPUT {scene.image_width}×{scene.image_height}</div>
         {scene.selected_loras.length ? <div className="scene-lora-strip">{scene.selected_loras.map(lora => <span className="scene-lora-chip" key={lora.id} title={lora.reason}>{lora.role === 'character' ? 'CHAR' : 'POSE'} · {lora.name}</span>)}</div> : null}
         {images[scene.id] ? <img className="scene-image" src={images[scene.id]} alt={scene.description} /> : null}
         {(() => {
@@ -214,7 +254,7 @@ function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPromp
           </div>;
         })()}
         {scene.image_error ? <div className="scene-error">{scene.image_error}</div> : null}
-        <div className="scene-footer"><span className={'scene-status ' + scene.image_status}>{scene.image_status.replace('_', ' ').toUpperCase()}</span><div className="scene-actions"><button className="text-btn" onClick={() => scene.positive_prompt ? onViewPrompt(scene) : onBuildPrompt(scene)} disabled={buildingPrompt === scene.id || queueing === scene.id}>{buildingPrompt === scene.id ? 'BUILDING…' : scene.positive_prompt ? 'VIEW PROMPT' : 'BUILD IMAGE PROMPT'}</button>{scene.positive_prompt ? <button className="text-btn queue-btn" onClick={() => onQueueImage(scene)} disabled={queueing === scene.id}>{queueing === scene.id ? 'QUEUING…' : scene.image_status === 'queued' || scene.image_status === 'running' ? 'REQUEUE IMAGE' : 'QUEUE IMAGE'}</button> : null}</div></div>
+        <div className="scene-footer"><span className={'scene-status ' + scene.image_status}>{scene.image_status.replace('_', ' ').toUpperCase()}</span><div className="scene-actions"><button className="mini-btn" onClick={() => scene.positive_prompt ? onViewPrompt(scene) : onBuildPrompt(scene)} disabled={buildingPrompt === scene.id || queueing === scene.id}>{buildingPrompt === scene.id ? 'BUILDING…' : scene.positive_prompt ? 'VIEW PROMPT' : 'BUILD IMAGE PROMPT'}</button>{scene.positive_prompt ? <button className="mini-btn queue-btn" onClick={() => onQueueImage(scene)} disabled={queueing === scene.id}>{queueing === scene.id ? 'QUEUING…' : scene.image_status === 'queued' || scene.image_status === 'running' ? 'REQUEUE IMAGE' : 'QUEUE IMAGE'}</button> : null}</div></div>
       </article>)}</div>}
     </section>
   </div>;
@@ -246,7 +286,7 @@ function GenerationMonitor({
   return <section className="hud-panel generation-monitor">
     <div className="panel-title-row">
       <div><div className="section-head">LIVE GENERATION TRACE</div><span className="tiny">{active ? ('STREAMING · ' + stageLabel(active.stage)) : 'EVERY LLM CALL · TOKEN STREAM · PIPELINE EVENTS'}</span></div>
-      <div className="trace-actions"><span className={'trace-live ' + (active ? 'active' : '')}><i />{active ? 'LIVE' : 'IDLE'}</span><button className="text-btn" onClick={onClear} disabled={!generations.length && !pipeline.length}>CLEAR</button></div>
+      <div className="trace-actions"><span className={'trace-live ' + (active ? 'active' : '')}><i />{active ? 'LIVE' : 'IDLE'}</span><button className="mini-btn" onClick={onClear} disabled={!generations.length && !pipeline.length}>CLEAR</button></div>
     </div>
 
     {pipeline.length ? <div className="pipeline-log">
@@ -321,7 +361,7 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
       <div className="section-head">OPENAI-COMPATIBLE LLM</div>
       <label>Base URL<input value={draft.llm_base_url} onChange={e => setDraft({ ...draft, llm_base_url: e.target.value })} placeholder="http://127.0.0.1:11434/v1"/></label>
       <label>Model<input value={draft.llm_model} onChange={e => setDraft({ ...draft, llm_model: e.target.value })} placeholder="qwen3:8b"/></label>
-      <label>API key<input type="password" value={draft.llm_api_key} onChange={e => setDraft({ ...draft, llm_api_key: e.target.value })} placeholder={llmApiKeyConfigured ? 'Stored securely · leave blank to keep current key' : 'Optional for local endpoints'}/>{llmApiKeyConfigured ? <button type="button" className="text-btn settings-clear-key" onClick={() => void onClearApiKey()}>CLEAR STORED KEY</button> : null}</label>
+      <label>API key<input type="password" value={draft.llm_api_key} onChange={e => setDraft({ ...draft, llm_api_key: e.target.value })} placeholder={llmApiKeyConfigured ? 'Stored securely · leave blank to keep current key' : 'Optional for local endpoints'}/>{llmApiKeyConfigured ? <button type="button" className="mini-btn settings-clear-key" onClick={() => void onClearApiKey()}>CLEAR STORED KEY</button> : null}</label>
       <label>Temperature<input type="number" min="0" max="2" step="0.1" value={draft.temperature} onChange={e => setDraft({ ...draft, temperature: Number(e.target.value) || 0 })}/></label>
       <div className="section-head setting-gap">SYSTEM PROMPTS · FULLY CUSTOMIZABLE</div>
       <small className="settings-hint">These prompts are sent as the system message for each LLM generation stage. They are persisted with the application settings and shown live in the Generation Trace.</small>
@@ -367,6 +407,13 @@ export default function App() {
   const [comfyProgress, setComfyProgress] = useState<Record<string, ComfyGenerationEvent>>({});
   const [sceneImages, setSceneImages] = useState<Record<string, string>>({});
   const [selectedChapterNumber, setSelectedChapterNumber] = useState<number | null>(null);
+  const [serviceStatus, setServiceStatus] = useState<ServiceStatusBoard>({
+    registry: { service: 'registry', status: 'checking', url: 'http://127.0.0.1:43217', detail: 'Checking Registry API…' },
+    searxng: { service: 'searxng', status: 'checking', url: 'http://127.0.0.1:8080', detail: 'Checking SearXNG API…' },
+    comfyui: { service: 'comfyui', status: 'checking', url: 'http://127.0.0.1:8188', detail: 'Checking ComfyUI API…' },
+  });
+  const [serviceRefreshing, setServiceRefreshing] = useState(false);
+
 
   const loadState = async () => {
     const next = await api.getState();
@@ -384,7 +431,7 @@ export default function App() {
       setStory(next);
       setSelectedChapterNumber(next.chapters[next.chapters.length - 1]?.number ?? null);
     } catch (e) {
-      setError(String(e));
+      setError(toErrorMessage(e));
     }
   };
   useEffect(() => {
@@ -443,7 +490,7 @@ export default function App() {
         void api.getStory(event.story_id).then(next => {
           if (disposed) return;
           setStory(current => current?.id === next.id ? next : current);
-        }).catch(() => {});
+        }).catch(error => setError(`ComfyUI scene refresh failed: ${toErrorMessage(error)}`));
       }
       if (event.status === 'completed') {
         void api.getSceneImage(event.story_id, event.chapter_number, event.scene_id)
@@ -466,7 +513,7 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => { void loadState().catch(e => setError(String(e))); }, []);
+  useEffect(() => { void loadState().catch(e => setError(toErrorMessage(e))); }, []);
   useEffect(() => {
     let disposed = false;
     const apply = (next: RegistryStatusDto) => {
@@ -476,6 +523,7 @@ export default function App() {
     setRegistryStatus(current => ({ ...current, status: 'starting', detail: 'Starting Raphael Model Registry…' }));
     void api.ensureRegistry()
       .then(apply)
+      .then(() => refreshServiceStatus())
       .catch(error => {
         if (!disposed) {
           setRegistryStatus({
@@ -520,6 +568,27 @@ export default function App() {
     }));
     return () => { disposed = true; };
   }, [story?.id, selectedChapterNumber]);
+
+  const refreshServiceStatus = async () => {
+    setServiceRefreshing(true);
+    try {
+      setServiceStatus(await api.getServiceStatus());
+    } catch (e) {
+      setServiceStatus(current => ({
+        registry: { ...current.registry, status: 'offline', detail: toErrorMessage(e) },
+        searxng: { ...current.searxng, status: 'offline', detail: toErrorMessage(e) },
+        comfyui: { ...current.comfyui, status: 'offline', detail: toErrorMessage(e) },
+      }));
+    } finally {
+      setServiceRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshServiceStatus();
+    const timer = window.setInterval(() => { void refreshServiceStatus(); }, 3000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (registryStatus.status !== 'on') {
@@ -568,9 +637,9 @@ export default function App() {
       setSelectedChapterNumber(next.chapters[next.chapters.length - 1]?.number ?? null);
       setPrompt('');
       await loadState();
-    } catch (e) { setError(String(e)); } finally { setBusy(false); }
+    } catch (e) { setError(toErrorMessage(e)); } finally { setBusy(false); }
   };
-  const generateNext = async () => { if (!story || busy) return; setBusy(true); setError(null); try { const next = await api.generateNextChapter(story.id, directive.trim()); setStory(next); setSelectedChapterNumber(next.chapters[next.chapters.length - 1]?.number ?? null); setDirective(''); await loadState(); } catch (e) { setError(String(e)); } finally { setBusy(false); } };
+  const generateNext = async () => { if (!story || busy) return; setBusy(true); setError(null); try { const next = await api.generateNextChapter(story.id, directive.trim()); setStory(next); setSelectedChapterNumber(next.chapters[next.chapters.length - 1]?.number ?? null); setDirective(''); await loadState(); } catch (e) { setError(toErrorMessage(e)); } finally { setBusy(false); } };
   const extractScenes = async (chapter: Chapter) => {
     if (!story || extracting) return;
     if (chapter.scenes.length > 0 && !window.confirm('Rebuild scenes? Existing scene prompts, queue IDs, and image state for this chapter will be replaced.')) {
@@ -583,19 +652,20 @@ export default function App() {
       setStory(await api.getStory(story.id));
       await loadState();
     } catch (e) {
-      setError(String(e));
+      setError(toErrorMessage(e));
     } finally {
       setExtracting(false);
     }
   };
-  const buildPrompt = async (scene: Scene) => { if (!story || buildingPrompt) return; const chapter = story.chapters.find(c => c.scenes.some(s => s.id === scene.id)); if (!chapter) return; setBuildingPrompt(scene.id); setError(null); try { setStory(await api.buildScenePrompt(story.id, chapter.number, scene.id)); await loadState(); } catch (e) { setError(String(e)); } finally { setBuildingPrompt(null); } };
+  const buildPrompt = async (scene: Scene) => { if (!story || buildingPrompt) return; const chapter = story.chapters.find(c => c.scenes.some(s => s.id === scene.id)); if (!chapter) return; setBuildingPrompt(scene.id); setError(null); try { setStory(await api.buildScenePrompt(story.id, chapter.number, scene.id)); await loadState(); } catch (e) { setError(toErrorMessage(e)); } finally { setBuildingPrompt(null); } };
   const viewPrompt = (scene: Scene) => setPromptPreview(scene);
-  const queueImage = async (scene: Scene) => { if (!story || queueing) return; const chapter = story.chapters.find(c => c.scenes.some(s => s.id === scene.id)); if (!chapter) return; setQueueing(scene.id); setError(null); try { setStory(await api.queueSceneImage(story.id, chapter.number, scene.id)); await loadState(); } catch (e) { setError(String(e)); } finally { setQueueing(null); } };
+  const queueImage = async (scene: Scene) => { if (!story || queueing) return; const chapter = story.chapters.find(c => c.scenes.some(s => s.id === scene.id)); if (!chapter) return; setQueueing(scene.id); setError(null); try { setStory(await api.queueSceneImage(story.id, chapter.number, scene.id)); await loadState(); } catch (e) { setError(toErrorMessage(e)); } finally { setQueueing(null); } };
 
   const currentChapter = story
     ? story.chapters.find(chapter => chapter.number === selectedChapterNumber) || story.chapters[story.chapters.length - 1] || null
     : null;
   const totalScenes = useMemo(() => story?.chapters.reduce((n, c) => n + c.scenes.length, 0) || 0, [story]);
+  const researchTrace = generationTraces.slice().reverse().find(trace => trace.stage.includes('research')) || null;
 
   if (!state) return (
     <div className="setup-shell">
@@ -608,7 +678,7 @@ export default function App() {
             <div className="error-box">{error}</div>
             <button className="primary-btn" onClick={() => {
               setError(null);
-              void loadState().catch(e => setError(String(e)));
+              void loadState().catch(e => setError(toErrorMessage(e)));
             }}>RETRY</button>
           </>
         ) : (
@@ -624,7 +694,7 @@ export default function App() {
   return <div className="app-shell">
     <header className="topbar">
       <div className="brand"><PulseMark/><div><div className="brand-title">RAPHAEL</div><div className="brand-subtitle">STORY GENERATOR</div></div></div>
-      <div className="top-status"><span className={state.llm_configured ? 'status-ok' : 'status-warn'}>LLM {state.llm_configured ? 'READY' : 'NOT CONFIGURED'}</span><span className={`registry-health ${registryStatus.status}`} title={registryStatus.detail || registryStatus.url}><i />REGISTRY {registryStatus.status === 'on' ? 'ON' : registryStatus.status === 'starting' ? 'STARTING' : 'OFF'}</span><span>SCENES {totalScenes}</span><span className={generationTraces.some(g => g.status === 'started' || g.status === 'token') ? 'status-ok' : ''}>TRACE {generationTraces.length}</span><button className="icon-btn" onClick={() => setSettingsOpen(true)} title="Engine settings">⚙</button></div>
+      <div className="top-status"><span className={state.llm_configured ? 'status-ok' : 'status-warn'}>LLM {state.llm_configured ? 'READY' : 'NOT CONFIGURED'}</span><span className={`registry-health ${registryStatus.status}`} title={registryStatus.detail || registryStatus.url}><i />REGISTRY {registryStatus.status === 'on' ? 'ON' : registryStatus.status === 'starting' ? 'STARTING' : 'OFF'}</span><span className={'service-inline ' + serviceStatus.searxng.status}>SEARXNG {serviceStatus.searxng.status.toUpperCase()}</span><span className={'service-inline ' + serviceStatus.comfyui.status}>COMFYUI {serviceStatus.comfyui.status.toUpperCase()}</span><span>SCENES {totalScenes}</span><span className={generationTraces.some(g => g.status === 'started' || g.status === 'token') ? 'status-ok' : ''}>TRACE {generationTraces.length}</span><button className="icon-btn" onClick={() => setSettingsOpen(true)} title="Engine settings">⚙</button></div>
     </header>
 
     <div className="workspace">
@@ -654,13 +724,14 @@ export default function App() {
       </main>
 
       <aside className="inspector">
+        <ServiceHealthPanel status={serviceStatus} onRefresh={() => void refreshServiceStatus()} refreshing={serviceRefreshing}/>
         <RegistryPanel status={registryStatus} catalog={registryCatalog} error={registryCatalogError}/>
         <GenerationMonitor
           generations={generationTraces}
           pipeline={pipelineTrace}
           onClear={() => { setGenerationTraces([]); setPipelineTrace([]); }}
         />
-        {story ? <ResearchPanel story={story}/> : null}
+        {story ? <ResearchPanel story={story} researchTrace={researchTrace}/> : null}
         {story ? <MetadataPanel story={story}/> : <section className="hud-panel inspector-panel placeholder-inspector"><div className="section-head">PIPELINE</div><div className="pipeline-step active"><b>01</b><span>STORY BIBLE</span></div><div className="pipeline-step"><b>02</b><span>CHAPTERS</span></div><div className="pipeline-step"><b>03</b><span>SCENE EXTRACTION</span></div><div className="pipeline-step"><b>04</b><span>IMAGE BUILDER</span></div><div className="pipeline-note">The story engine is designed so scene extraction and ComfyUI image generation can run without changing the story canon.</div></section>}
       </aside>
     </div>
