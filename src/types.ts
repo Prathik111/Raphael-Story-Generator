@@ -184,7 +184,7 @@ export interface CommandResult {
 
 
 export type RegistryStatus = 'off' | 'starting' | 'on';
-export type ServiceHealthStatus = 'online' | 'offline' | 'disabled';
+export type ServiceHealthStatus = 'online' | 'offline' | 'disabled' | 'checking';
 
 export interface RegistryStatusDto {
   status: RegistryStatus;
