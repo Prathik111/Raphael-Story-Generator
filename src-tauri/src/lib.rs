@@ -881,6 +881,10 @@ fn looks_like_concept_pose_lora(value: &str) -> bool {
     .any(|marker| text.contains(marker))
 }
 
+fn can_select_concept_pose(concept_count: usize) -> bool {
+    concept_count == 0
+}
+
 fn lora_candidate_text(model: &registry::RegistryLoraCandidate) -> String {
     let description = model.description.as_deref().unwrap_or("no description");
     let tags = if model.tags.is_empty() {
@@ -1709,22 +1713,15 @@ Return:
             character_count += 1;
             Some(character_name.clone())
         } else {
-            if concept_count >= 1 {
+            if !can_select_concept_pose(concept_count) {
                 continue;
             }
             concept_count += 1;
             None
         };
 
-        if role == "character" {
-            if character_count > scene.characters.len().min(2) {
-                continue;
-            }
-        } else {
-            if concept_count >= 1 {
-                continue;
-            }
-            concept_count += 1;
+        if role == "character" && character_count > scene.characters.len().min(2) {
+            continue;
         }
 
         let artifact = registry.model_artifact(&model.id).await?;
@@ -1998,6 +1995,12 @@ mod tests {
     #[test]
     fn normalize_name_is_stable_for_matching() {
         assert_eq!(normalize_name("  Alice  "), "alice");
+    }
+
+    #[test]
+    fn concept_pose_selection_allows_one_and_rejects_additional_choices() {
+        assert!(can_select_concept_pose(0));
+        assert!(!can_select_concept_pose(1));
     }
 
     #[test]
