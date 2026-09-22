@@ -1,3 +1,5 @@
+mod workflow_builder;
+
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -1186,6 +1188,19 @@ Return:
 }
 
 #[tauri::command]
+fn build_comfyui_workflow(
+    workflow: Value,
+    lora_stack: Vec<workflow_builder::WorkflowLoraInput>,
+    checkpoint_node: Option<String>,
+) -> AppResult<workflow_builder::WorkflowBuildResult> {
+    workflow_builder::build_workflow(workflow_builder::WorkflowBuildRequest {
+        workflow,
+        lora_stack,
+        checkpoint_node,
+    })
+}
+
+#[tauri::command]
 async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: String, store: State<'_, Store>) -> AppResult<Story> {
     let mut story = require_story(&store, &story_id)?;
     let settings = store.settings.read().map_err(|e| AppError::Storage(e.to_string()))?.clone();
@@ -1210,23 +1225,50 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
         ("{{STORY_ID}}", Value::String(story.id.clone())),
         ("{{SCENE_ID}}", Value::String(scene.id.clone())),
         ("{{CHECKPOINT}}", Value::String(story.visual_config.checkpoint_file_name.clone())),
-        ("{{STYLE_LORA_1}}", Value::String(story.visual_config.style_loras.get(0).map(|l| l.file_name.clone()).unwrap_or_default())),
-        ("{{STYLE_LORA_1_WEIGHT}}", json!(story.visual_config.style_loras.get(0).map(|l| l.weight).unwrap_or(0.0))),
-        ("{{STYLE_LORA_2}}", Value::String(story.visual_config.style_loras.get(1).map(|l| l.file_name.clone()).unwrap_or_default())),
-        ("{{STYLE_LORA_2_WEIGHT}}", json!(story.visual_config.style_loras.get(1).map(|l| l.weight).unwrap_or(0.0))),
     ];
-    let character_loras = scene.selected_loras.iter().filter(|l| l.role == "character").take(2).collect::<Vec<_>>();
-    let concept_lora = scene.selected_loras.iter().find(|l| l.role == "concept_pose");
-    replacements.extend([
-        ("{{CHARACTER_LORA_1}}", Value::String(character_loras.get(0).map(|l| l.file_name.clone()).unwrap_or_default())),
-        ("{{CHARACTER_LORA_1_WEIGHT}}", json!(character_loras.get(0).map(|l| l.weight).unwrap_or(0.0))),
-        ("{{CHARACTER_LORA_2}}", Value::String(character_loras.get(1).map(|l| l.file_name.clone()).unwrap_or_default())),
-        ("{{CHARACTER_LORA_2_WEIGHT}}", json!(character_loras.get(1).map(|l| l.weight).unwrap_or(0.0))),
-        ("{{CONCEPT_LORA}}", Value::String(concept_lora.map(|l| l.file_name.clone()).unwrap_or_default())),
-        ("{{CONCEPT_LORA_WEIGHT}}", json!(concept_lora.map(|l| l.weight).unwrap_or(0.0))),
-    ]);
     let replacement_refs = replacements.iter().map(|(token, value)| (*token, value.clone())).collect::<Vec<_>>();
     replace_workflow_placeholders(&mut workflow, &replacement_refs);
+
+    let character_loras = scene
+        .selected_loras
+        .iter()
+        .filter(|l| l.role == "character")
+        .take(2)
+        .collect::<Vec<_>>();
+    let concept_lora = scene.selected_loras.iter().find(|l| l.role == "concept_pose");
+
+    let mut lora_stack = Vec::<workflow_builder::WorkflowLoraInput>::new();
+    for lora in &story.visual_config.style_loras {
+        lora_stack.push(workflow_builder::WorkflowLoraInput {
+            file_name: lora.file_name.clone(),
+            weight: lora.weight,
+            clip_weight: None,
+        });
+    }
+    for lora in character_loras {
+        lora_stack.push(workflow_builder::WorkflowLoraInput {
+            file_name: lora.file_name.clone(),
+            weight: lora.weight,
+            clip_weight: None,
+        });
+    }
+    if let Some(lora) = concept_lora {
+        lora_stack.push(workflow_builder::WorkflowLoraInput {
+            file_name: lora.file_name.clone(),
+            weight: lora.weight,
+            clip_weight: None,
+        });
+    }
+
+    // Tool boundary: the selector has finished. From here on the workflow builder
+    // deterministically creates one LoraLoader per selected LoRA and chains
+    // MODEL + CLIP through the complete ordered stack.
+    let built = workflow_builder::build_workflow(workflow_builder::WorkflowBuildRequest {
+        workflow,
+        lora_stack,
+        checkpoint_node: None,
+    })?;
+    let workflow = built.workflow;
     let comfyui_url = settings.comfyui_url.trim();
     if !(comfyui_url.starts_with("http://") || comfyui_url.starts_with("https://")) {
         return Err(AppError::ComfyUi("ComfyUI URL must start with http:// or https://".into()));
@@ -1271,7 +1313,7 @@ pub fn run() {
             app.manage(store);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_app_state, get_story, get_settings, save_settings, create_story, generate_next_chapter, extract_scenes, build_scene_prompt, queue_scene_image, registry::ensure_registry, registry::get_registry_status, registry::get_registry_models])
+        .invoke_handler(tauri::generate_handler![get_app_state, get_story, get_settings, save_settings, create_story, generate_next_chapter, extract_scenes, build_scene_prompt, queue_scene_image, build_comfyui_workflow, registry::ensure_registry, registry::get_registry_status, registry::get_registry_models])
         .run(tauri::generate_context!())
         .expect("error while running Raphael Story Generator");
 }
