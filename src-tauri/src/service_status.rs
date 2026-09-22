@@ -24,6 +24,7 @@ pub struct ServiceStatusBoard {
     pub comfyui: ServiceStatusDto,
 }
 
+// Live health is derived from real endpoint probes.
 pub async fn probe(registry: &RegistryState, settings: &AppSettings) -> ServiceStatusBoard {
     let registry_status = registry.status().await;
     let registry = ServiceStatusDto {
