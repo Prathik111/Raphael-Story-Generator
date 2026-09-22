@@ -326,6 +326,66 @@ mod tests {
     }
 
     #[test]
+    fn injects_placeholder_image_size() {
+        let input = json!({
+            "1": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": { "ckpt_name": "base.safetensors" }
+            },
+            "2": {
+                "class_type": "CLIPTextEncode",
+                "inputs": { "clip": ["1", 1], "text": "positive" }
+            },
+            "3": {
+                "class_type": "CLIPTextEncode",
+                "inputs": { "clip": ["1", 1], "text": "negative" }
+            },
+            "4": {
+                "class_type": "KSampler",
+                "inputs": {
+                    "model": ["1", 0],
+                    "positive": ["2", 0],
+                    "negative": ["3", 0],
+                    "latent_image": ["5", 0],
+                    "seed": 1
+                }
+            },
+            "5": {
+                "class_type": "EmptyLatentImage",
+                "inputs": {
+                    "width": "{{IMAGE_WIDTH}}",
+                    "height": "{{IMAGE_HEIGHT}}",
+                    "batch_size": 1
+                }
+            }
+        });
+        let result = build_workflow(WorkflowBuildRequest {
+            workflow: input,
+            checkpoint_node: None,
+            image_width: 1216,
+            image_height: 832,
+            lora_stack: Vec::new(),
+        }).unwrap();
+        let workflow = result.workflow.as_object().unwrap();
+        assert_eq!(workflow["5"]["inputs"]["width"], json!(1216));
+        assert_eq!(workflow["5"]["inputs"]["height"], json!(832));
+    }
+
+    #[test]
+    fn rejects_workflows_without_image_size_injection_point() {
+        let mut input = base_workflow();
+        input.as_object_mut().unwrap().remove("5");
+        let result = build_workflow(WorkflowBuildRequest {
+            workflow: input,
+            checkpoint_node: None,
+            image_width: 1024,
+            image_height: 1024,
+            lora_stack: Vec::new(),
+        });
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn preserves_workflow_when_no_loras_are_selected() {
         let input = base_workflow();
         let result = build_workflow(WorkflowBuildRequest {
