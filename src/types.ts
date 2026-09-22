@@ -264,3 +264,15 @@ export interface PipelineEvent {
   status: PipelineTraceStatus;
   message: string;
 }
+
+export interface WorkflowLoraInput {
+  file_name: string;
+  weight: number;
+  clip_weight: number | null;
+}
+
+export interface WorkflowBuildResult {
+  workflow: unknown;
+  lora_node_ids: string[];
+  checkpoint_node: string;
+}
