@@ -1,7 +1,9 @@
 mod registry;
+mod research;
 mod workflow_builder;
 
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
+use research::ResearchBundle;
 use serde::{Deserialize, Serialize};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
@@ -24,6 +26,8 @@ enum AppError {
     ComfyUi(String),
     #[error("Registry error: {0}")]
     Registry(String),
+    #[error("Web research error: {0}")]
+    WebResearch(String),
 }
 impl serde::Serialize for AppError {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: serde::Serializer {
@@ -92,6 +96,17 @@ Output rules:
 - Do not wrap the JSON in Markdown fences.
 - Do not add commentary before or after the JSON."#;
 
+fn default_web_research_enabled() -> bool { true }
+fn default_web_search_url() -> String { "http://127.0.0.1:8080".into() }
+fn default_web_proxy_url() -> String { "socks5h://127.0.0.1:9050".into() }
+fn default_web_require_proxy() -> bool { true }
+fn default_web_search_max_results() -> usize { 8 }
+fn default_web_fetch_max_chars() -> usize { 12_000 }
+fn default_web_context_max_chars() -> usize { 36_000 }
+fn default_web_research_system_prompt() -> String {
+    research::DEFAULT_WEB_RESEARCH_SYSTEM_PROMPT.to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
@@ -104,6 +119,22 @@ pub struct AppSettings {
     pub scene_director_system_prompt: String,
     pub lora_selector_system_prompt: String,
     pub image_prompt_generator_system_prompt: String,
+    #[serde(default = "default_web_research_enabled")]
+    pub web_research_enabled: bool,
+    #[serde(default = "default_web_search_url")]
+    pub web_search_url: String,
+    #[serde(default = "default_web_proxy_url")]
+    pub web_proxy_url: String,
+    #[serde(default = "default_web_require_proxy")]
+    pub web_require_proxy: bool,
+    #[serde(default = "default_web_search_max_results")]
+    pub web_search_max_results: usize,
+    #[serde(default = "default_web_fetch_max_chars")]
+    pub web_fetch_max_chars: usize,
+    #[serde(default = "default_web_context_max_chars")]
+    pub web_context_max_chars: usize,
+    #[serde(default = "default_web_research_system_prompt")]
+    pub web_research_system_prompt: String,
     pub comfyui_url: String,
     pub comfyui_workflow_json: String,
 }
@@ -119,6 +150,14 @@ impl Default for AppSettings {
             scene_director_system_prompt: DEFAULT_SCENE_DIRECTOR_SYSTEM_PROMPT.into(),
             lora_selector_system_prompt: DEFAULT_LORA_SELECTOR_SYSTEM_PROMPT.into(),
             image_prompt_generator_system_prompt: DEFAULT_IMAGE_PROMPT_SYSTEM_PROMPT.into(),
+            web_research_enabled: true,
+            web_search_url: default_web_search_url(),
+            web_proxy_url: default_web_proxy_url(),
+            web_require_proxy: true,
+            web_search_max_results: default_web_search_max_results(),
+            web_fetch_max_chars: default_web_fetch_max_chars(),
+            web_context_max_chars: default_web_context_max_chars(),
+            web_research_system_prompt: default_web_research_system_prompt(),
             comfyui_url: "http://127.0.0.1:8188".into(),
             comfyui_workflow_json: String::new(),
         }
@@ -236,6 +275,8 @@ pub struct Story {
     pub id: String,
     pub title: String,
     pub source_prompt: String,
+    #[serde(default)]
+    pub research: research::ResearchBundle,
     pub metadata: StoryMetadata,
     #[serde(default)]
     pub visual_config: StoryVisualConfig,
@@ -935,16 +976,45 @@ async fn create_story(
     validate_visual_setup(&visual_config, &checkpoint_artifact, &style_artifacts)?;
 
     if settings.llm_model.trim().is_empty() { return Err(AppError::Llm("configure an LLM model in settings".into())); }
+
+    let research_bundle = if settings.web_research_enabled {
+        emit_pipeline(store.app(), "web_research", "started", "Searching the web through the private local research gateway");
+        match research::research_web(store.app(), &settings, &prompt).await {
+            Ok(bundle) => {
+                emit_pipeline(
+                    store.app(),
+                    "web_research",
+                    "completed",
+                    format!("Extracted {} source-backed fact(s) from {} source page(s)", bundle.facts.len(), bundle.sources.len()),
+                );
+                bundle
+            }
+            Err(error) => {
+                emit_pipeline(store.app(), "web_research", "error", error.to_string());
+                return Err(error);
+            }
+        }
+    } else {
+        ResearchBundle::default()
+    };
+
     let system = settings.story_architect_system_prompt.as_str();
     let schema_hint = r#"
 JSON shape:
 {"title":"","metadata":{"genre":[],"tags":[],"demographic":"","content_rating":"","tone":[],"source_type":"","source_title":"","inspirations":[]},"premise":"","central_conflict":"","themes":[],"world_setting":"","world_rules":[],"locations":[],"characters":[{"name":"","role":"","personality":[],"appearance":"","clothing":"","motivations":[]}],"relationships":[{"source":"","target":"","relation_type":"","description":""}],"open_threads":[],"introduction":"","chapter":{"title":"","summary":"","text":"","events":[],"continuity_updates":[],"character_state_updates":[],"relationship_updates":[],"open_threads":[]}}
 "#;
-    emit_pipeline(store.app(), "story_architect", "started", "Generating story bible and opening chapter");
-    let raw = chat(store.app(), &settings, "story_architect", system, &format!("User story request:
+    let research_context = research::story_architect_context(&research_bundle);
+    let architect_prompt = format!("USER STORY REQUEST:
 {}
 
-{}", prompt.trim(), schema_hint)).await?;
+{}
+
+{}
+
+Use the web-research facts only when they are supported by the cited sources. Do not invent external facts that are absent from the supplied research.
+Return the JSON shape above.", prompt.trim(), research_context, schema_hint);
+    emit_pipeline(store.app(), "story_architect", "started", "Generating story bible and opening chapter");
+    let raw = chat(store.app(), &settings, "story_architect", system, &architect_prompt).await?;
     let parsed: InitialResponse = serde_json::from_str(clean_json(&raw)).map_err(|e| AppError::ModelResponse(format!("{}; raw model output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
     validate_initial_response(&parsed)?;
     let story_id = Uuid::new_v4().to_string();
@@ -1026,7 +1096,7 @@ JSON shape:
     };
     let created = now();
     let story = Story {
-        id: story_id, title: parsed.title, source_prompt: prompt,
+        id: story_id, title: parsed.title, source_prompt: prompt, research: research_bundle,
         metadata: parsed.metadata, visual_config: visual_config.clone(), introduction: parsed.introduction,
         bible: StoryBible {
             premise: parsed.premise,
@@ -1056,7 +1126,23 @@ Text: {}", c.title, c.summary, c.events, c.text)).unwrap_or_default();
     let system = settings.continuity_writer_system_prompt.as_str();
     let bible = serde_json::to_string(&story.bible).map_err(|e| AppError::ModelResponse(e.to_string()))?;
     let directive = if user_prompt.trim().is_empty() { "(none — continue naturally)" } else { user_prompt.trim() };
+
+    if settings.web_research_enabled && !user_prompt.trim().is_empty() {
+        emit_pipeline(store.app(), "web_research", "started", format!("Researching the Chapter {} directive privately", next_number));
+        match research::research_web(store.app(), &settings, &format!("{}: {}", story.title, user_prompt.trim())).await {
+            Ok(bundle) => {
+                research::merge_into(&mut story.research, bundle);
+                emit_pipeline(store.app(), "web_research", "completed", format!("Added new source-backed research for Chapter {}", next_number));
+            }
+            Err(error) => {
+                emit_pipeline(store.app(), "web_research", "error", error.to_string());
+                return Err(error);
+            }
+        }
+    }
+
     let schema = r#"{"title":"","summary":"","text":"","events":[],"continuity_updates":[],"new_characters":[{"name":"","role":"","personality":[],"appearance":"","clothing":"","motivations":[]}],"character_state_updates":[{"character_id":"","current_state":"","clothing":""}],"relationship_updates":[{"source_character":"","target_character":"","relation_type":"","description":""}],"open_threads":[]}"#;
+    let research_context = research::story_architect_context(&story.research);
     let user = format!("CHAPTER NUMBER: {}
 
 STORY BIBLE:
@@ -1068,8 +1154,11 @@ PREVIOUS CHAPTER:
 USER DIRECTIVE:
 {}
 
+RESEARCH CONTEXT:
+{}
+
 Return this JSON shape:
-{}", next_number, bible, previous, directive, schema);
+{}", next_number, bible, previous, directive, research_context, schema);
     emit_pipeline(store.app(), "continuity_writer", "started", format!("Generating Chapter {}", next_number));
     let raw = chat(store.app(), &settings, "continuity_writer", system, &user).await?;
     let parsed: ChapterDraft = serde_json::from_str(clean_json(&raw)).map_err(|e| AppError::ModelResponse(format!("{}; raw model output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
@@ -1552,6 +1641,13 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
     write_story(&store, story)
 }
 
+#[tauri::command]
+async fn test_private_web_research(store: State<'_, Store>) -> AppResult<String> {
+    let settings = store.settings.read().map_err(|e| AppError::Storage(e.to_string()))?.clone();
+    research::check_private_search(&settings).await?;
+    Ok("Private web research gateway is reachable and the local proxy is configured.".into())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -1563,7 +1659,7 @@ pub fn run() {
             app.manage(store);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_app_state, get_story, get_settings, save_settings, create_story, generate_next_chapter, extract_scenes, build_scene_prompt, queue_scene_image, build_comfyui_workflow, registry::ensure_registry, registry::get_registry_status, registry::get_registry_models])
+        .invoke_handler(tauri::generate_handler![get_app_state, get_story, get_settings, save_settings, create_story, generate_next_chapter, extract_scenes, build_scene_prompt, queue_scene_image, build_comfyui_workflow, test_private_web_research, registry::ensure_registry, registry::get_registry_status, registry::get_registry_models])
         .run(tauri::generate_context!())
         .expect("error while running Raphael Story Generator");
 }
