@@ -395,7 +395,7 @@ pub fn resume_queued_generations(app: &AppHandle, base_url: &str) {
     let jobs = store.data.read().ok().map(|data| {
         data.stories.values().flat_map(|story| story.chapters.iter().flat_map(|chapter| chapter.scenes.iter().filter_map(|scene| {
             resumable_prompt_id(scene).map(|prompt_id| (story.id.clone(), chapter.number, scene.id.clone(), prompt_id))
-        })).collect::<Vec<_>>()()
+        }))).collect::<Vec<_>>()
     }).unwrap_or_default();
 
     for (story_id, chapter_number, scene_id, prompt_id) in jobs {
