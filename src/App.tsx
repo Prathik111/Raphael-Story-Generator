@@ -112,7 +112,7 @@ function MetadataPanel({ story }: { story: Story }) {
       <div className="tag-row">{story.visual_config.style_loras.length ? story.visual_config.style_loras.map(lora => <span className="tag tone" key={lora.id}>{lora.name}</span>) : <span className="tiny">NONE SELECTED</span>}</div>
     </section>
     <section className="hud-panel inspector-panel">
-      <div className="section-head">GENRE</div<TagRow values={story.metadata.genre}/>
+      <div className="section-head">GENRE</div><TagRow values={story.metadata.genre}/>
       <div className="section-head muted-head">TAGS</div><TagRow values={story.metadata.tags} tone="dim"/>
     </section>
     <section className="hud-panel inspector-panel">
