@@ -28,7 +28,7 @@ fn compose_dir(app: &AppHandle) -> AppResult<PathBuf> {
     }
 
     let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../privacy-search");
+        .join("../privacy-search");
 
     if dev.is_dir() {
         return Ok(dev);
