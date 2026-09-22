@@ -6,6 +6,8 @@ Raphael Story Generator is a local-first Tauri + React application for building 
 
 ```
 User prompt
+  -> Private web research
+  -> Source-backed fact extraction
   -> Story analyzer / Story Bible
   -> Introduction + Chapter 1
   -> Chapter N continuation + optional user directive
@@ -27,9 +29,33 @@ The app persists each story under the Tauri application data directory as JSON. 
 
 Chapter continuation is stateful. The optional user directive is passed only to the next chapter planner/writer; established canon remains authoritative and the resulting events are then written back into the story state.
 
+## Private web research
+
+Story creation performs real web research before the Story Architect stage when **web research is enabled**. Raphael does not use a hosted search API or a public SearXNG instance. The desktop app only accepts a local SearXNG endpoint and, by default, requires a local SOCKS5/Tor proxy for all external search/source traffic.
+
+The repository includes a local privacy gateway under `privacy-search/`:
+
+~~~text
+Raphael -> localhost SearXNG -> Tor -> Internet search engines
+        \-> local Tor proxy -> source pages
+~~~
+
+SearXNG is configured to route its outbound engine requests through Tor. Raphael also fetches each selected source page through the local Tor proxy, extracts readable text locally, and sends only the retrieved source context to the configured LLM for citation-backed fact extraction. Research facts and source URLs are persisted with the story.
+
+Start the gateway from `privacy-search/`:
+
+~~~powershell
+$env:SEARXNG_SECRET = [guid]::NewGuid().ToString("N")
+docker compose up -d --build
+~~~
+
+The default endpoints are `http://127.0.0.1:8080` for SearXNG and `socks5h://127.0.0.1:9050` for Tor. Public SearXNG URLs are rejected by the application, and private research fails closed when the required local proxy is unavailable.
+
+The web-research extractor requires every factual claim to include source IDs and evidence. The Story Architect receives those source-backed facts and source URLs rather than being told to rely on its pretrained knowledge for external facts.
+
 ## LLM configuration
 
-The engine uses an OpenAI-compatible `/chat/completions` endpoint so it can point at local or remote providers. The default configuration is intended for a local Ollama-style endpoint:
+The engine uses an OpenAI-compatible `/chat/completions` endpoint so it can point at local or remote providers. Web research is a separate network path: the search query and fetched web content go through the local privacy gateway first. The default configuration is intended for a local Ollama-style endpoint:
 
 - Base URL: `http://127.0.0.1:11434/v1`
 - Model: `qwen3:8b`
@@ -44,8 +70,9 @@ The Engine Settings panel exposes a separate editable system prompt for each sta
 - Scene Director
 - LoRA Selector
 - Image Prompt Generator
+- Web Research Extractor
 
-These prompts are persisted with the local application settings.
+Web research settings include the local SearXNG URL, local Tor/SOCKS5 proxy, fail-closed proxy requirement, result/source limits, and research extractor prompt. These settings are persisted with the local application settings.
 
 ## Development
 
