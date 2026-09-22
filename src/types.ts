@@ -104,10 +104,33 @@ export interface Chapter {
   created_at: string;
 }
 
+export interface ResearchSource {
+  id: string;
+  title: string;
+  url: string;
+  snippet: string;
+  content: string;
+}
+
+export interface ResearchFact {
+  claim: string;
+  evidence: string;
+  source_ids: string[];
+  confidence: string;
+}
+
+export interface ResearchBundle {
+  queries: string[];
+  sources: ResearchSource[];
+  facts: ResearchFact[];
+  retrieved_at: string;
+}
+
 export interface Story {
   id: string;
   title: string;
   source_prompt: string;
+  research: ResearchBundle;
   metadata: StoryMetadata;
   visual_config: StoryVisualConfig;
   introduction: string;
@@ -127,6 +150,14 @@ export interface AppSettings {
   scene_director_system_prompt: string;
   lora_selector_system_prompt: string;
   image_prompt_generator_system_prompt: string;
+  web_research_enabled: boolean;
+  web_search_url: string;
+  web_proxy_url: string;
+  web_require_proxy: boolean;
+  web_search_max_results: number;
+  web_fetch_max_chars: number;
+  web_context_max_chars: number;
+  web_research_system_prompt: string;
   comfyui_url: string;
   comfyui_workflow_json: string;
 }
