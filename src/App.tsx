@@ -357,7 +357,7 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
     try {
       setResearchTestResult(await api.testPrivateWebResearch());
     } catch (error) {
-      setResearchTestResult(String(error));
+      setResearchTestResult(toErrorMessage(error));
     } finally {
       setResearchTesting(false);
     }
@@ -506,7 +506,7 @@ export default function App() {
             if (disposed || !image) return;
             setSceneImages(current => ({ ...current, [event.scene_id]: image }));
           })
-          .catch(() => {});
+          .catch(error => setError(`ComfyUI image load failed: ${toErrorMessage(error)}`));
       }
     }).then(unlisten => {
       if (disposed) unlisten();
@@ -537,7 +537,7 @@ export default function App() {
           setRegistryStatus({
             status: 'off',
             url: 'http://127.0.0.1:43217',
-            detail: String(error),
+            detail: toErrorMessage(error),
           });
         }
       });
@@ -615,7 +615,7 @@ export default function App() {
       } catch (error) {
         if (disposed) return;
         setRegistryCatalog({ checkpoints: [], checkpoint_total: 0, loras: [], lora_total: 0 });
-        setRegistryCatalogError(String(error));
+        setRegistryCatalogError(toErrorMessage(error));
       }
     };
 
