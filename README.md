@@ -182,3 +182,6 @@ When private research is enabled, the story view shows the actual search queries
 
 
 SearXNG remains health-checked even when research is disabled, so the service panel reflects the API's actual availability rather than the feature toggle.
+
+
+Feature-branch CI runs use the same concurrency group as pull-request runs, so the latest verification is the authoritative run instead of accumulating duplicate builds.
