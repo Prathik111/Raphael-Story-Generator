@@ -151,31 +151,22 @@ fn build_local_client(timeout: Duration) -> AppResult<Client> {
 }
 
 fn build_client(settings: &AppSettings, timeout: Duration) -> AppResult<Client> {
-    if settings.web_require_proxy && settings.web_proxy_url.trim().is_empty() {
+    if settings.web_proxy_url.trim().is_empty() {
         return Err(AppError::WebResearch(
-            "private web research requires a local proxy; configure Tor/SOCKS5 first".into(),
+            "private web research requires the local Tor/SOCKS proxy; direct Internet access is disabled".into(),
         ));
     }
 
-    let mut builder = Client::builder()
+    let proxy_url = ensure_local_proxy(settings.web_proxy_url.trim())?;
+    Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(timeout)
         .redirect(reqwest::redirect::Policy::none())
-        .user_agent("Raphael-Story-Generator/0.1");
-
-    if !settings.web_proxy_url.trim().is_empty() {
-        let proxy_url = ensure_local_proxy(settings.web_proxy_url.trim())?;
-        builder = builder.proxy(
+        .user_agent("Raphael-Story-Generator/0.1")
+        .proxy(
             Proxy::all(proxy_url.as_str())
                 .map_err(|error| AppError::WebResearch(format!("failed to configure web proxy: {error}")))?,
-        );
-    } else if settings.web_require_proxy {
-        return Err(AppError::WebResearch(
-            "private web research refuses to use a direct connection".into(),
-        ));
-    }
-
-    builder
+        )
         .build()
         .map_err(|error| AppError::WebResearch(format!("failed to create research HTTP client: {error}")))
 }
@@ -488,9 +479,7 @@ pub async fn research_web(
     }
 
     let _ = ensure_local_endpoint(settings.web_search_url.trim(), "web search")?;
-    if settings.web_require_proxy {
-        let _ = ensure_local_proxy(settings.web_proxy_url.trim())?;
-    }
+    let _ = ensure_local_proxy(settings.web_proxy_url.trim())?;
 
     let results = search(settings, query).await?;
     if results.is_empty() {
