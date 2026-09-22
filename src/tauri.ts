@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { AppSettings, AppState, RegistryCatalog, RegistryStatusDto, SceneExtractionResult, Story } from './types';
+import type { AppSettings, AppState, RegistryCatalog, RegistryStatusDto, SceneExtractionResult, Story, StoryVisualSetup } from './types';
 
 export const isWebApp = typeof window !== 'undefined' && !(window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 
@@ -16,7 +16,7 @@ export const api = {
   isWebApp,
   getState: () => command<AppState>('get_app_state'),
   getStory: (id: string) => command<Story>('get_story', { id }),
-  createStory: (prompt: string) => command<Story>('create_story', { prompt }),
+  createStory: (prompt: string, visualSetup: StoryVisualSetup) => command<Story>('create_story', { prompt, visualSetup }),
   generateNextChapter: (storyId: string, userPrompt: string) =>
     command<Story>('generate_next_chapter', { storyId, userPrompt }),
   extractScenes: (storyId: string, chapterNumber: number) =>
