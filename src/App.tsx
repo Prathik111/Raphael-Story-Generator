@@ -322,7 +322,7 @@ export default function App() {
             response: '',
             error: null,
           };
-          return [...current, next].slice(-20);
+          return [...current, next];
         }
         if (!existing) return current;
 
@@ -343,7 +343,7 @@ export default function App() {
 
     void subscribeToPipeline(event => {
       if (disposed) return;
-      setPipelineTrace(current => [...current, event].slice(-20));
+      setPipelineTrace(current => [...current, event]);
     }).then(unlisten => {
       if (disposed) unlisten();
       else unlistenPipeline = unlisten;
