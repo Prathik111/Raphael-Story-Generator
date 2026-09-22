@@ -106,6 +106,20 @@ fn collect_model_clip_refs(value: &Value, checkpoint_node: &str, output_index: u
     }
 }
 
+fn replace_exact_refs_in_original_nodes(
+    nodes: &mut Map<String, Value>,
+    original_node_ids: &HashSet<String>,
+    checkpoint_node: &str,
+    output_index: usize,
+    replacement: &[Value],
+) {
+    for node_id in original_node_ids {
+        if let Some(node) = nodes.get_mut(node_id) {
+            replace_exact_refs(node, checkpoint_node, output_index, replacement);
+        }
+    }
+}
+
 fn replace_exact_refs(value: &mut Value, checkpoint_node: &str, output_index: usize, replacement: &[Value]) {
     match value {
         Value::Array(items) if items.len() == 2
@@ -166,6 +180,7 @@ pub fn build_workflow(request: WorkflowBuildRequest) -> AppResult<WorkflowBuildR
     }
 
     let mut next_id = next_numeric_node_id(nodes);
+    let original_node_ids = nodes.keys().cloned().collect::<HashSet<_>>();
     let mut previous_node = checkpoint_node.clone();
     let mut created_nodes = Vec::new();
 
@@ -194,18 +209,22 @@ pub fn build_workflow(request: WorkflowBuildRequest) -> AppResult<WorkflowBuildR
     let final_model_ref = vec![Value::String(previous_node.clone()), Value::from(0_u64)];
     let final_clip_ref = vec![Value::String(previous_node.clone()), Value::from(1_u64)];
 
-    replace_exact_refs(
-        &mut workflow,
-        &checkpoint_node,
-        0,
-        &final_model_ref,
-    );
-    replace_exact_refs(
-        &mut workflow,
-        &checkpoint_node,
-        1,
-        &final_clip_ref,
-    );
+    if let Value::Object(nodes) = &mut workflow {
+        replace_exact_refs_in_original_nodes(
+            nodes,
+            &original_node_ids,
+            &checkpoint_node,
+            0,
+            &final_model_ref,
+        );
+        replace_exact_refs_in_original_nodes(
+            nodes,
+            &original_node_ids,
+            &checkpoint_node,
+            1,
+            &final_clip_ref,
+        );
+    }
 
     Ok(WorkflowBuildResult {
         workflow,
