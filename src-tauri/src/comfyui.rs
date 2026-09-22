@@ -61,6 +61,22 @@ fn emit(app: &AppHandle, story_id: &str, chapter_number: usize, scene_id: &str, 
     );
 }
 
+pub async fn check_api(raw: &str) -> AppResult<()> {
+    let base = base_url(raw)?;
+    let client = http_client()?;
+    let url = base.join("system_stats").map_err(|error| AppError::ComfyUi(format!("invalid ComfyUI system stats URL: {error}")))?;
+    let response = client.get(url).send().await.map_err(|error| AppError::ComfyUi(format!("ComfyUI health check failed: {error}")))?;
+    let status = response.status();
+    let body = response.text().await.map_err(|error| AppError::ComfyUi(format!("failed to read ComfyUI health response: {error}")))?;
+    if !status.is_success() {
+        return Err(AppError::ComfyUi(format!("ComfyUI /system_stats returned HTTP {}: {}", status, body.chars().take(300).collect::<String>())));
+    }
+    let value: Value = serde_json::from_str(&body).map_err(|error| AppError::ComfyUi(format!("ComfyUI health response was not valid JSON: {error}")))?;
+    if !value.is_object() {
+        return Err(AppError::ComfyUi("ComfyUI /system_stats did not return a JSON object".into()));
+    }
+    Ok(())
+}
 fn http_client() -> AppResult<Client> {
     Client::builder()
         .connect_timeout(Duration::from_secs(5))
@@ -359,9 +375,10 @@ async fn monitor_generation(app: AppHandle, base_url_raw: String, story_id: Stri
 
 pub fn spawn_generation_monitor(app: AppHandle, base_url: String, story_id: String, chapter_number: usize, scene_id: String, client_id: String, prompt_id: String) {
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = monitor_generation(app.clone(), base_url, story_id.clone(), chapter_number, scene_id.clone(), client_id, prompt_id).await {
+        if let Err(error) = monitor_generation(app.clone(), base_url, story_id.clone(), chapter_number, scene_id.clone(), client_id, prompt_id.clone()).await {
             let message = error.to_string();
             let _ = set_scene_status(&app, &story_id, chapter_number, &scene_id, "failed", Some(message.clone()));
+            emit(&app, &story_id, chapter_number, &scene_id, &prompt_id, "failed", None, None, None, None, None, None, Some(message.clone()), "ComfyUI generation failed");
             emit_pipeline(&app, "comfyui", "error", message);
         }
     });
