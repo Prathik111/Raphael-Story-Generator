@@ -26,7 +26,12 @@ pub struct ServiceStatusBoard {
 
 // Live health is derived from real endpoint probes.
 pub async fn probe(registry: &RegistryState, settings: &AppSettings) -> ServiceStatusBoard {
-    let registry_status = registry.status().await;
+    let registry_future = registry.status();
+    let searx_future = research::check_search_api(settings);
+    let comfy_future = comfyui::check_api(&settings.comfyui_url);
+    let (registry_status, searx_result, comfy_result) =
+        tokio::join!(registry_future, searx_future, comfy_future);
+
     let registry = ServiceStatusDto {
         service: "registry".into(),
         status: match registry_status.status {
@@ -38,7 +43,7 @@ pub async fn probe(registry: &RegistryState, settings: &AppSettings) -> ServiceS
         detail: registry_status.detail,
     };
 
-    let searxng = match research::check_search_api(settings).await {
+    let searxng = match searx_result {
         Ok(()) => ServiceStatusDto {
             service: "searxng".into(),
             status: ServiceHealthStatus::Online,
@@ -59,7 +64,7 @@ pub async fn probe(registry: &RegistryState, settings: &AppSettings) -> ServiceS
         },
     };
 
-    let comfyui = match comfyui::check_api(&settings.comfyui_url).await {
+    let comfyui = match comfy_result {
         Ok(()) => ServiceStatusDto {
             service: "comfyui".into(),
             status: ServiceHealthStatus::Online,
@@ -74,5 +79,9 @@ pub async fn probe(registry: &RegistryState, settings: &AppSettings) -> ServiceS
         },
     };
 
-    ServiceStatusBoard { registry, searxng, comfyui }
+    ServiceStatusBoard {
+        registry,
+        searxng,
+        comfyui,
+    }
 }
