@@ -130,7 +130,7 @@ impl RegistryState {
         self.inner.last_error.read().ok().and_then(|value| value.clone())
     }
 
-    async fn status(&self) -> RegistryStatusDto {
+    pub async fn status(&self) -> RegistryStatusDto {
         let status = if self.inner.starting.load(Ordering::Acquire) {
             RegistryStatus::Starting
         } else if self.health().await {
