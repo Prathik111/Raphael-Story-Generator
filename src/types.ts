@@ -133,5 +133,7 @@ export interface RegistryModel {
 
 export interface RegistryCatalog {
   checkpoints: RegistryModel[];
+  checkpoint_total: number;
   loras: RegistryModel[];
+  lora_total: number;
 }
