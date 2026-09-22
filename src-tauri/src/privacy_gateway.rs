@@ -119,7 +119,7 @@ fn install_runtime_files(app: &AppHandle) -> AppResult<PathBuf> {
 async fn docker_compose_up(dir: &Path) -> AppResult<()> {
     let dir = dir.to_path_buf();
 
-    let status = tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let output = Command::new("docker")
             .args(["compose", "--project-name", PROJECT_NAME, "up", "-d", "--build"])
             .current_dir(&dir)
