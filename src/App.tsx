@@ -323,7 +323,7 @@ function SettingsOverlay({ settings, onSave, onClose, onError }: { settings: App
       <label className="toggle-setting"><input type="checkbox" checked={draft.web_research_enabled} onChange={e => setDraft({ ...draft, web_research_enabled: e.target.checked })}/> Enable web research before story generation</label>
       <label>Local SearXNG URL<input value={draft.web_search_url} onChange={e => setDraft({ ...draft, web_search_url: e.target.value })} placeholder="http://127.0.0.1:8080"/></label>
       <label>Local SOCKS/Tor proxy<input value={draft.web_proxy_url} onChange={e => setDraft({ ...draft, web_proxy_url: e.target.value })} placeholder="socks5h://127.0.0.1:9050"/></label>
-      <label className="toggle-setting"><input type="checkbox" checked={draft.web_require_proxy} onChange={e => setDraft({ ...draft, web_require_proxy: e.target.checked })}/> Refuse direct Internet connections for research</label>
+      <div className="toggle-setting">TOR PROXY REQUIREMENT · ENFORCED</div>
       <div className="settings-grid-two">
         <label>Max search results<input type="number" min="1" max="12" value={draft.web_search_max_results} onChange={e => setDraft({ ...draft, web_search_max_results: Number(e.target.value) || 1 })}/></label>
         <label>Max page text<input type="number" min="2000" max="12000" step="500" value={draft.web_fetch_max_chars} onChange={e => setDraft({ ...draft, web_fetch_max_chars: Number(e.target.value) || 2000 })}/></label>
