@@ -96,6 +96,38 @@ pub struct StoryBible {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
+pub struct VisualStyleLora {
+    pub id: String,
+    pub name: String,
+    pub weight: f32,
+    pub file_name: String,
+    pub activation_prompts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct StoryVisualConfig {
+    pub checkpoint_id: String,
+    pub checkpoint_name: String,
+    pub checkpoint_file_name: String,
+    pub style_loras: Vec<VisualStyleLora>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SceneLoraSelection {
+    pub id: String,
+    pub name: String,
+    pub role: String,
+    pub character: Option<String>,
+    pub weight: f32,
+    pub file_name: String,
+    pub activation_prompts: Vec<String>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct Scene {
     pub id: String,
     pub order: usize,
@@ -108,6 +140,7 @@ pub struct Scene {
     pub dialogue: String,
     pub positive_prompt: String,
     pub negative_prompt: String,
+    pub selected_loras: Vec<SceneLoraSelection>,
     pub image_status: String,
     pub image_url: Option<String>,
     pub comfy_prompt_id: Option<String>,
@@ -130,6 +163,8 @@ pub struct Story {
     pub title: String,
     pub source_prompt: String,
     pub metadata: StoryMetadata,
+    #[serde(default)]
+    pub visual_config: StoryVisualConfig,
     pub introduction: String,
     pub bible: StoryBible,
     pub chapters: Vec<Chapter>,
@@ -144,6 +179,12 @@ pub struct StorySummary {
     pub scene_count: usize,
     pub updated_at: String,
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoryVisualSetup {
+    pub checkpoint_id: String,
+    pub style_lora_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppStateDto {
     pub stories: Vec<StorySummary>,
@@ -225,6 +266,22 @@ struct SceneDraft {
 struct SceneResponse { scenes: Vec<SceneDraft> }
 #[derive(Debug, Deserialize)]
 struct ImagePromptResponse { positive_prompt: String, negative_prompt: String }
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct SceneLoraSelectorResponse {
+    selections: Vec<SceneLoraDraft>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct SceneLoraDraft {
+    id: String,
+    role: String,
+    character: Option<String>,
+    weight: f32,
+    reason: String,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct StoreData { stories: HashMap<String, Story> }
 
@@ -378,6 +435,90 @@ fn validate_chapter_draft(parsed: &ChapterDraft, chapter_number: usize) -> AppRe
     Ok(())
 }
 
+fn unique_nonempty(values: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut result = Vec::new();
+    for value in values {
+        let value = value.trim().to_string();
+        if value.is_empty() || result.iter().any(|existing| existing == &value) {
+            continue;
+        }
+        result.push(value);
+    }
+    result
+}
+
+fn text_tokens(value: &str) -> Vec<String> {
+    value
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|token| token.len() >= 3)
+        .map(str::to_string)
+        .collect()
+}
+
+fn lexical_score(query: &str, candidate: &str) -> i32 {
+    let query_tokens = text_tokens(query);
+    let candidate_tokens = text_tokens(candidate);
+    query_tokens
+        .iter()
+        .filter(|token| candidate_tokens.iter().any(|value| value == *token || value.contains(token.as_str()) || token.contains(value.as_str())))
+        .count() as i32
+}
+
+fn looks_like_style_lora(value: &str) -> bool {
+    let text = value.to_lowercase();
+    [
+        "style", "anime", "illustration", "lineart", "line art", "watercolor",
+        "oil", "cinematic", "render", "aesthetic", "artstyle", "art style",
+        "painting", "sketch",
+    ]
+    .iter()
+    .any(|marker| text.contains(marker))
+}
+
+fn looks_like_concept_pose_lora(value: &str) -> bool {
+    let text = value.to_lowercase();
+    [
+        "pose", "concept", "action", "gesture", "motion", "dynamic",
+        "composition", "camera", "perspective", "anatomy", "foreshorten",
+    ]
+    .iter()
+    .any(|marker| text.contains(marker))
+}
+
+fn lora_candidate_text(model: &registry::RegistryLoraCandidate) -> String {
+    format!(
+        "ID: {} | NAME: {} | BASE: {} | CREATOR: {} | DESCRIPTION: {}",
+        model.id,
+        model.name,
+        model.base_model.as_deref().unwrap_or("unknown"),
+        model.creator.as_deref().unwrap_or("unknown"),
+        model.description.as_deref().unwrap_or(""),
+    )
+}
+
+fn validate_visual_setup(
+    setup: &StoryVisualConfig,
+    checkpoint: &registry::RegistryModelArtifact,
+    styles: &[registry::RegistryModelArtifact],
+) -> AppResult<()> {
+    if setup.checkpoint_id.trim().is_empty() {
+        return Err(AppError::Registry("a base checkpoint must be selected for the visual pipeline".into()));
+    }
+    if checkpoint.file_name.trim().is_empty() {
+        return Err(AppError::Registry("selected checkpoint has no available file".into()));
+    }
+    if styles.len() > 2 {
+        return Err(AppError::Registry("at most two style LoRAs can be locked for a story".into()));
+    }
+    for style in styles {
+        if style.file_name.trim().is_empty() {
+            return Err(AppError::Registry(format!("style LoRA {} has no available file", style.id)));
+        }
+    }
+    Ok(())
+}
+
 fn validate_settings(settings: &AppSettings) -> AppResult<()> {
     if settings.llm_model.trim().is_empty() {
         return Err(AppError::Llm("LLM model cannot be empty".into()));
@@ -478,8 +619,62 @@ fn save_settings(settings: AppSettings, store: State<'_, Store>) -> AppResult<Ap
     Ok(settings)
 }
 #[tauri::command]
-async fn create_story(prompt: String, store: State<'_, Store>) -> AppResult<Story> {
+async fn create_story(
+    prompt: String,
+    visual_setup: StoryVisualSetup,
+    store: State<'_, Store>,
+    registry: State<'_, registry::RegistryState>,
+) -> AppResult<Story> {
     let settings = store.settings.read().map_err(|e| AppError::Storage(e.to_string()))?.clone();
+    let client = registry.client().await?;
+
+    let checkpoint = client.get(&visual_setup.checkpoint_id).await
+        .map_err(|e| AppError::Registry(format!("failed to load checkpoint: {e}")))?;
+    if checkpoint.model_type != registry_core::ModelType::Checkpoint {
+        return Err(AppError::Registry("selected base model is not a checkpoint".into()));
+    }
+    let compatible = client
+        .compatible(&checkpoint.id, Some(registry_core::ModelType::Lora))
+        .await
+        .map_err(|e| AppError::Registry(format!("failed to resolve compatible LoRAs: {e}")))?;
+    let compatible_ids = compatible.iter().map(|model| model.id.as_str()).collect::<std::collections::HashSet<_>>();
+
+    let mut style_loras = Vec::new();
+    for id in visual_setup.style_lora_ids.iter().take(2) {
+        let model = client.get(id).await
+            .map_err(|e| AppError::Registry(format!("failed to load style LoRA {id}: {e}")))?;
+        if model.model_type != registry_core::ModelType::Lora {
+            return Err(AppError::Registry(format!("model {id} is not a LoRA")));
+        }
+        if !compatible_ids.contains(model.id.as_str()) {
+            return Err(AppError::Registry(format!("style LoRA '{}' is not compatible with checkpoint '{}'", model.name, checkpoint.name)));
+        }
+        let artifact = registry.model_artifact(&model.id).await?;
+        style_loras.push(VisualStyleLora {
+            id: model.id,
+            name: model.name,
+            weight: 0.75,
+            file_name: artifact.file_name,
+            activation_prompts: artifact.activation_prompts,
+        });
+    }
+
+    let checkpoint_artifact = registry.model_artifact(&checkpoint.id).await?;
+    let mut visual_config = StoryVisualConfig {
+        checkpoint_id: checkpoint.id.clone(),
+        checkpoint_name: checkpoint.name.clone(),
+        checkpoint_file_name: checkpoint_artifact.file_name,
+        style_loras,
+    };
+    let style_artifacts = visual_config.style_loras.iter().map(|item| registry::RegistryModelArtifact {
+        id: item.id.clone(),
+        name: item.name.clone(),
+        file_name: item.file_name.clone(),
+        activation_prompts: item.activation_prompts.clone(),
+    }).collect::<Vec<_>>();
+    validate_visual_setup(&visual_config, &checkpoint_artifact, &style_artifacts)?;
+
+    if settings.llm_model.trim().is_empty() { return Err(AppError::Llm("configure an LLM model in settings".into())); }
     if settings.llm_model.trim().is_empty() { return Err(AppError::Llm("configure an LLM model in settings".into())); }
     let system = r#"
 You are Raphael Story Architect. Convert a user's natural-language story request into a structured story bible and opening chapter.
@@ -578,7 +773,7 @@ JSON shape:
     let created = now();
     let story = Story {
         id: story_id, title: parsed.title, source_prompt: prompt,
-        metadata: parsed.metadata, introduction: parsed.introduction,
+        metadata: parsed.metadata, visual_config: visual_config.clone(), introduction: parsed.introduction,
         bible: StoryBible {
             premise: parsed.premise,
             central_conflict: parsed.central_conflict,
@@ -716,13 +911,19 @@ Return:
         id: format!("{}-scene-{:03}", chapter.number, index + 1), order: index + 1, description: scene.description,
         location: scene.location, time: scene.time, characters: scene.characters, action: scene.action,
         composition: scene.composition, dialogue: scene.dialogue, positive_prompt: String::new(),
-        negative_prompt: String::new(), image_status: "not_ready".into(), image_url: None, comfy_prompt_id: None,
+        negative_prompt: String::new(), selected_loras: Vec::new(), image_status: "not_ready".into(), image_url: None, comfy_prompt_id: None,
     }).collect::<Vec<_>>();
     story.chapters[chapter_index].scenes = scenes.clone(); story.updated_at = now(); write_story(&store, story)?;
     Ok(SceneExtractionResult { chapter_number, scenes })
 }
 #[tauri::command]
-async fn build_scene_prompt(story_id: String, chapter_number: usize, scene_id: String, store: State<'_, Store>) -> AppResult<Story> {
+async fn build_scene_prompt(
+    story_id: String,
+    chapter_number: usize,
+    scene_id: String,
+    store: State<'_, Store>,
+    registry: State<'_, registry::RegistryState>,
+) -> AppResult<Story> {
     let mut story = require_story(&store, &story_id)?;
     let settings = store.settings.read().map_err(|e| AppError::Storage(e.to_string()))?.clone();
     let chapter = story.chapters.iter().find(|c| c.number == chapter_number).ok_or_else(|| AppError::ModelResponse("chapter not found".into()))?;
@@ -750,9 +951,13 @@ async fn build_scene_prompt(story_id: String, chapter_number: usize, scene_id: S
         .map(|c| format!("{} — appearance: {}; clothing: {}; personality: {:?}", c.name, c.appearance, c.clothing, c.personality))
         .collect::<Vec<_>>().join("
 ");
+    let selected_loras = select_scene_loras(&registry, &settings, &story, scene).await?;
+
     let system = r#"
 You are Raphael Image Builder prompt director. Convert one scene into a positive and negative image-generation prompt suitable for an anime/manga diffusion workflow.
-Positive prompt should describe composition, camera, subjects, appearance, clothing, action, setting, lighting, mood and clean visual style. Negative prompt should suppress identity drift, extra limbs, malformed hands, text artifacts, low quality and scene contradictions.
+The story's LOCKED VISUAL STYLE is authoritative and must never be replaced with another style. Dynamic LoRAs have already been selected separately for character identity and concept/pose support.
+Positive prompt should describe composition, camera, subjects, appearance, clothing, action, setting, lighting, mood and clean visual style. Do not name or invent different LoRAs.
+Negative prompt should suppress identity drift, extra limbs, malformed hands, text artifacts, low quality and scene contradictions.
 Do not invent a different character appearance. Return ONLY valid JSON.
 "#;
     let schema = r#"{"positive_prompt":"","negative_prompt":""}"#;
@@ -766,19 +971,196 @@ DIALOGUE: {}
 CHARACTERS:
 {}
 
+LOCKED STYLE:
+{}
+
+DYNAMIC LORAS:
+{}
+
 Return:
-{}", story.title, scene.description, scene.location, scene.time, scene.action, scene.composition, scene.dialogue, characters, schema);
+{}",
+        story.title,
+        scene.description,
+        scene.location,
+        scene.time,
+        scene.action,
+        scene.composition,
+        scene.dialogue,
+        characters,
+        story.visual_config.style_loras.iter().map(|l| format!("{} (weight {})", l.name, l.weight)).collect::<Vec<_>>().join(", "),
+        selected_loras.iter().map(|l| format!("{} [{} / {}] (weight {})", l.name, l.role, l.character.clone().unwrap_or_default(), l.weight)).collect::<Vec<_>>().join(", "),
+        schema
+    );
     let raw = chat(&settings, system, &user).await?;
     let parsed: ImagePromptResponse = serde_json::from_str(clean_json(&raw)).map_err(|e| AppError::ModelResponse(format!("{}; raw model output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
     let chapter_mut = story.chapters.iter_mut().find(|c| c.number == chapter_number)
         .ok_or_else(|| AppError::ModelResponse("chapter disappeared while saving scene prompt".into()))?;
     let scene_mut = chapter_mut.scenes.iter_mut().find(|s| s.id == scene_id)
         .ok_or_else(|| AppError::ModelResponse("scene disappeared while saving scene prompt".into()))?;
-    scene_mut.positive_prompt = parsed.positive_prompt;
+    let activation_prompts = unique_nonempty(
+        story.visual_config.style_loras.iter()
+            .flat_map(|l| l.activation_prompts.clone())
+            .chain(selected_loras.iter().flat_map(|l| l.activation_prompts.clone()))
+            .collect::<Vec<_>>()
+    );
+    scene_mut.selected_loras = selected_loras;
+    scene_mut.positive_prompt = if activation_prompts.is_empty() {
+        parsed.positive_prompt
+    } else {
+        format!("{}, {}", activation_prompts.join(", "), parsed.positive_prompt)
+    };
     scene_mut.negative_prompt = parsed.negative_prompt;
     scene_mut.image_status = "prompt_ready".into();
     story.updated_at = now(); write_story(&store, story)
 }
+async fn select_scene_loras(
+    registry: &registry::RegistryState,
+    settings: &AppSettings,
+    story: &Story,
+    scene: &Scene,
+) -> AppResult<Vec<SceneLoraSelection>> {
+    if story.visual_config.checkpoint_id.trim().is_empty() {
+        return Err(AppError::Registry("this story has no base checkpoint configured".into()));
+    }
+
+    let candidates = registry.compatible_loras(&story.visual_config.checkpoint_id).await?;
+    if candidates.is_empty() {
+        return Err(AppError::Registry("no compatible LoRAs are registered for the selected checkpoint".into()));
+    }
+
+    let scene_query = format!(
+        "{} {} {} {} {} {}",
+        scene.description, scene.action, scene.composition, scene.location, scene.time,
+        scene.characters.join(" ")
+    );
+    let character_text = story.bible.characters.iter()
+        .filter(|character| scene.characters.iter().any(|name| {
+            normalize_name(name) == normalize_name(&character.name) || name.trim() == character.id
+        }))
+        .take(2)
+        .map(|character| format!(
+            "{} — appearance: {}; clothing: {}; role: {}; personality: {:?}",
+            character.name, character.appearance, character.clothing, character.role, character.personality
+        ))
+        .collect::<Vec<_>>();
+    let character_query = format!("{} {}", character_text.join(" "), scene_query);
+
+    let mut character_candidates = candidates.iter()
+        .filter(|model| !looks_like_style_lora(&lora_candidate_text(model)))
+        .map(|model| (lexical_score(&character_query, &lora_candidate_text(model)), model))
+        .collect::<Vec<_>>();
+    character_candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
+    character_candidates.truncate(28);
+
+    let mut concept_candidates = candidates.iter()
+        .filter(|model| !looks_like_style_lora(&lora_candidate_text(model)))
+        .map(|model| {
+            let text = lora_candidate_text(model);
+            let bonus = if looks_like_concept_pose_lora(&text) { 5 } else { 0 };
+            (lexical_score(&format!("{} pose action concept", scene_query), &text) + bonus, model)
+        })
+        .collect::<Vec<_>>();
+    concept_candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
+    concept_candidates.truncate(22);
+
+    let mut candidate_lines = Vec::new();
+    candidate_lines.push("CHARACTER CANDIDATES:".to_string());
+    for (_, model) in character_candidates {
+        candidate_lines.push(lora_candidate_text(model));
+    }
+    candidate_lines.push("CONCEPT/POSE CANDIDATES:".to_string());
+    for (_, model) in concept_candidates {
+        candidate_lines.push(lora_candidate_text(model));
+    }
+
+    let scene_characters = if character_text.is_empty() {
+        "(no known character in this scene)".to_string()
+    } else {
+        character_text.join("
+")
+    };
+
+    let system = r#"
+You are Raphael LoRA Selector. Select dynamic LoRAs for one image scene.
+The story's style LoRAs are LOCKED separately and must never be replaced, supplemented or switched here.
+Choose at most one character LoRA for each of the first two visible primary characters, and at most one concept/pose LoRA when it materially helps the scene.
+Do not select style LoRAs. Do not select the same LoRA twice. Do not invent IDs.
+Only choose IDs from the supplied candidate lists.
+If no candidate genuinely matches a slot, omit that slot.
+Return ONLY valid JSON.
+"#;
+    let schema = r#"{"selections":[{"id":"","role":"character|concept_pose","character":"","weight":0.75,"reason":""}]}"#;
+    let user = format!(
+        "SCENE: {}
+ACTION: {}
+COMPOSITION: {}
+CHARACTERS IN SCENE:
+{}
+
+CANDIDATES:
+{}
+
+Return:
+{}",
+        scene.description, scene.action, scene.composition, scene_characters,
+        candidate_lines.join("
+"), schema
+    );
+    let raw = chat(settings, system, &user).await?;
+    let parsed: SceneLoraSelectorResponse = serde_json::from_str(clean_json(&raw))
+        .map_err(|e| AppError::ModelResponse(format!("LoRA selector output was invalid: {}; raw output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
+
+    let candidate_map = candidates.iter().map(|m| (m.id.clone(), m)).collect::<HashMap<_, _>>();
+    let mut result = Vec::new();
+    let mut used = std::collections::HashSet::new();
+    let mut character_count = 0usize;
+    let mut concept_count = 0usize;
+
+    for draft in parsed.selections {
+        let Some(model) = candidate_map.get(&draft.id) else {
+            return Err(AppError::ModelResponse(format!("LoRA selector returned unknown model ID '{}'", draft.id)));
+        };
+        if !used.insert(model.id.clone()) {
+            continue;
+        }
+        let role = draft.role.trim().to_lowercase();
+        if role != "character" && role != "concept_pose" {
+            continue;
+        }
+        if role == "character" {
+            if character_count >= scene.characters.len().min(2) {
+                continue;
+            }
+            character_count += 1;
+        } else {
+            if concept_count >= 1 {
+                continue;
+            }
+            concept_count += 1;
+        }
+
+        let artifact = registry.model_artifact(&model.id).await?;
+        let weight = if role == "character" {
+            draft.weight.clamp(0.55, 1.0)
+        } else {
+            draft.weight.clamp(0.25, 0.85)
+        };
+
+        result.push(SceneLoraSelection {
+            id: model.id.clone(),
+            name: model.name.clone(),
+            role,
+            character: draft.character.filter(|value| !value.trim().is_empty()),
+            weight,
+            file_name: artifact.file_name,
+            activation_prompts: artifact.activation_prompts,
+            reason: draft.reason.trim().to_string(),
+        });
+    }
+
+    Ok(result)
+}
+
 #[tauri::command]
 async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: String, store: State<'_, Store>) -> AppResult<Story> {
     let mut story = require_story(&store, &story_id)?;
@@ -797,13 +1179,30 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
     let mut workflow: Value = serde_json::from_str(&settings.comfyui_workflow_json)
         .map_err(|e| AppError::ComfyUi(format!("workflow JSON is invalid: {e}")))?;
     let seed = (Uuid::new_v4().as_u128() & u64::MAX as u128) as u64;
-    replace_workflow_placeholders(&mut workflow, &[
+    let mut replacements = vec![
         ("{{POSITIVE_PROMPT}}", Value::String(scene.positive_prompt.clone())),
         ("{{NEGATIVE_PROMPT}}", Value::String(scene.negative_prompt.clone())),
         ("{{SEED}}", Value::Number(serde_json::Number::from(seed))),
         ("{{STORY_ID}}", Value::String(story.id.clone())),
         ("{{SCENE_ID}}", Value::String(scene.id.clone())),
+        ("{{CHECKPOINT}}", Value::String(story.visual_config.checkpoint_file_name.clone())),
+        ("{{STYLE_LORA_1}}", Value::String(story.visual_config.style_loras.get(0).map(|l| l.file_name.clone()).unwrap_or_default())),
+        ("{{STYLE_LORA_1_WEIGHT}}", Value::String(story.visual_config.style_loras.get(0).map(|l| l.weight.to_string()).unwrap_or_else(|| "0".into()))),
+        ("{{STYLE_LORA_2}}", Value::String(story.visual_config.style_loras.get(1).map(|l| l.file_name.clone()).unwrap_or_default())),
+        ("{{STYLE_LORA_2_WEIGHT}}", Value::String(story.visual_config.style_loras.get(1).map(|l| l.weight.to_string()).unwrap_or_else(|| "0".into()))),
+    ];
+    let character_loras = scene.selected_loras.iter().filter(|l| l.role == "character").take(2).collect::<Vec<_>>();
+    let concept_lora = scene.selected_loras.iter().find(|l| l.role == "concept_pose");
+    replacements.extend([
+        ("{{CHARACTER_LORA_1}}", Value::String(character_loras.get(0).map(|l| l.file_name.clone()).unwrap_or_default())),
+        ("{{CHARACTER_LORA_1_WEIGHT}}", Value::String(character_loras.get(0).map(|l| l.weight.to_string()).unwrap_or_else(|| "0".into()))),
+        ("{{CHARACTER_LORA_2}}", Value::String(character_loras.get(1).map(|l| l.file_name.clone()).unwrap_or_default())),
+        ("{{CHARACTER_LORA_2_WEIGHT}}", Value::String(character_loras.get(1).map(|l| l.weight.to_string()).unwrap_or_else(|| "0".into()))),
+        ("{{CONCEPT_LORA}}", Value::String(concept_lora.map(|l| l.file_name.clone()).unwrap_or_default())),
+        ("{{CONCEPT_LORA_WEIGHT}}", Value::String(concept_lora.map(|l| l.weight.to_string()).unwrap_or_else(|| "0".into()))),
     ]);
+    let replacement_refs = replacements.iter().map(|(token, value)| (*token, value.clone())).collect::<Vec<_>>();
+    replace_workflow_placeholders(&mut workflow, &replacement_refs);
     let comfyui_url = settings.comfyui_url.trim();
     if !(comfyui_url.starts_with("http://") || comfyui_url.starts_with("https://")) {
         return Err(AppError::ComfyUi("ComfyUI URL must start with http:// or https://".into()));
@@ -891,6 +1290,7 @@ mod tests {
             title: "Story".into(),
             source_prompt: String::new(),
             metadata: StoryMetadata::default(),
+            visual_config: StoryVisualConfig::default(),
             introduction: String::new(),
             bible: StoryBible::default(),
             chapters: Vec::new(),
