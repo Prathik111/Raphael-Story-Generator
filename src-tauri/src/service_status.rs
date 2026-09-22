@@ -1,4 +1,4 @@
-use crate::{comfyui, registry::RegistryState, research, AppSettings};
+use crate::{comfyui, privacy_gateway, registry::RegistryState, research, AppSettings};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,11 +56,17 @@ pub async fn probe(registry: &RegistryState, settings: &AppSettings) -> ServiceS
                 },
             ),
         },
+        Err(_) if privacy_gateway::is_starting() => ServiceStatusDto {
+            service: "searxng".into(),
+            status: ServiceHealthStatus::Checking,
+            url: settings.web_search_url.clone(),
+            detail: Some("Starting the bundled SearXNG and Tor gateway…".into()),
+        },
         Err(error) => ServiceStatusDto {
             service: "searxng".into(),
             status: ServiceHealthStatus::Offline,
             url: settings.web_search_url.clone(),
-            detail: Some(error.to_string()),
+            detail: privacy_gateway::last_error().or_else(|| Some(error.to_string())),
         },
     };
 
