@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from './tauri';
-import type { AppSettings, AppState, Chapter, RegistryCatalog, RegistryStatusDto, Scene, Story } from './types';
+import type { AppSettings, AppState, Chapter, RegistryCatalog, RegistryStatusDto, Scene, Story, StoryVisualSetup } from './types';
 
 function PulseMark() {
   return <div className="raphael-core" aria-label="Raphael"><span className="core-dot"/><i className="core-orbit orbit-a"/><i className="core-orbit orbit-b"/><i className="core-orbit orbit-c"/></div>;
@@ -28,17 +28,37 @@ function TagRow({ values, tone = '' }: { values: string[]; tone?: string }) {
   return <div className="tag-row">{splitTags(values).map(value => <span className={`tag ${tone}`} key={value}>{value}</span>)}</div>;
 }
 
-function NewStoryPanel({ busy, prompt, setPrompt, onGenerate }: { busy: boolean; prompt: string; setPrompt: (v: string) => void; onGenerate: () => void }) {
+function NewStoryPanel({
+  busy, prompt, setPrompt, onGenerate, registryStatus, catalog, checkpointId, setCheckpointId, styleLoraIds, setStyleLoraIds,
+}: {
+  busy: boolean; prompt: string; setPrompt: (v: string) => void; onGenerate: () => void;
+  registryStatus: RegistryStatusDto; catalog: RegistryCatalog; checkpointId: string; setCheckpointId: (v: string) => void;
+  styleLoraIds: string[]; setStyleLoraIds: (v: string[]) => void;
+}) {
+  const toggleStyle = (id: string) => {
+    if (styleLoraIds.includes(id)) { setStyleLoraIds(styleLoraIds.filter(value => value !== id)); return; }
+    if (styleLoraIds.length >= 2) return;
+    setStyleLoraIds([...styleLoraIds, id]);
+  };
   return <section className="hero-panel hud-panel">
     <div className="scan-corners" />
-    <div className="eyebrow">RAPHAEL STORY ENGINE · STORY BIBLE FIRST</div>
+    <div className="eyebrow">RAPHAEL STORY ENGINE · VISUAL PROFILE FIRST</div>
     <h1>Turn a prompt into a living story.</h1>
-    <p className="hero-copy">Describe the story, characters, world and mood you have in mind. Raphael extracts the canon, generates the introduction and Chapter 1, then keeps the story state for every continuation.</p>
-    <textarea className="story-prompt" value={prompt} onChange={event => setPrompt(event.target.value)} placeholder="Example: A dark fantasy anime about a quiet 17-year-old academy student who discovers that the rival she dislikes is protecting a secret tied to her family..." disabled={busy} rows={6}/>
-    <div className="hero-actions"><button className="primary-btn" onClick={onGenerate} disabled={busy || !prompt.trim()}>{busy ? 'BUILDING STORY BIBLE…' : 'GENERATE STORY'}</button><span className="tiny">INTRODUCTION + CHAPTER 1 · CANONICAL STATE SAVED</span></div>
+    <p className="hero-copy">Describe the story, then choose the base checkpoint and optional style LoRAs for its entire visual identity. Character and concept/pose LoRAs are selected scene-by-scene while the chosen style remains locked.</p>
+    <div className="visual-setup-grid">
+      <label className="visual-select">BASE CHECKPOINT<select value={checkpointId} onChange={e => setCheckpointId(e.target.value)} disabled={busy || registryStatus.status !== 'on'}>
+        <option value="">SELECT CHECKPOINT</option>{catalog.checkpoints.map(model => <option key={model.id} value={model.id}>{model.name}{model.base_model ? ' · ' + model.base_model : ''}</option>)}
+      </select></label>
+      <div className="style-picker"><div className="style-picker-head"><div><div className="section-head">LOCKED STYLE LORAS</div><span className="tiny">0–2 · FIXED FOR THIS STORY</span></div><span className="status-chip">{styleLoraIds.length}/2</span></div>
+        {registryStatus.status !== 'on' ? <div className="style-picker-note">Waiting for Model Registry…</div> : catalog.loras.length === 0 ? <div className="style-picker-note">No LoRAs are registered.</div> : <div className="style-options">
+          {catalog.loras.map(model => { const selected = styleLoraIds.includes(model.id); return <button type="button" className={'style-option ' + (selected ? 'selected' : '')} key={model.id} onClick={() => toggleStyle(model.id)} disabled={busy || (!selected && styleLoraIds.length >= 2)}><span className="style-option-check">{selected ? '✓' : '○'}</span><span><strong>{model.name}</strong><small>{model.base_model || 'BASE UNKNOWN'}</small></span></button>; })}
+        </div>}
+      </div>
+    </div>
+    <textarea className="story-prompt" value={prompt} onChange={event => setPrompt(event.target.value)} placeholder="Example: A dark fantasy anime about a quiet academy student who discovers that the rival she dislikes is protecting a secret tied to her family..." disabled={busy} rows={6}/>
+    <div className="hero-actions"><button className="primary-btn" onClick={onGenerate} disabled={busy || !prompt.trim() || !checkpointId || registryStatus.status !== 'on'}>{busy ? 'BUILDING STORY BIBLE…' : 'GENERATE STORY'}</button><span className="tiny">STYLE LOCKED · SCENE LORAS AUTO-SELECTED · REGISTRY-VALIDATED</span></div>
   </section>;
 }
-
 
 function RegistryPanel({ status, catalog, error }: { status: RegistryStatusDto; catalog: RegistryCatalog; error: string | null }) {
   const statusLabel = status.status === 'on' ? 'ON' : status.status === 'starting' ? 'STARTING' : 'OFF';
@@ -85,8 +105,14 @@ function MetadataPanel({ story }: { story: Story }) {
       <div className="profile-row"><span>CHAPTERS</span><b>{story.chapters.length}</b></div>
       <div className="profile-row"><span>SCENES</span><b>{story.chapters.reduce((n, c) => n + c.scenes.length, 0)}</b></div>
     </section>
+    <section className="hud-panel inspector-panel visual-profile-panel">
+      <div className="section-head">VISUAL PROFILE</div>
+      <div className="profile-row"><span>CHECKPOINT</span><b>{story.visual_config.checkpoint_name || '—'}</b></div>
+      <div className="section-head muted-head">LOCKED STYLE</div>
+      <div className="tag-row">{story.visual_config.style_loras.length ? story.visual_config.style_loras.map(lora => <span className="tag tone" key={lora.id}>{lora.name}</span>) : <span className="tiny">NONE SELECTED</span>}</div>
+    </section>
     <section className="hud-panel inspector-panel">
-      <div className="section-head">GENRE</div><TagRow values={story.metadata.genre}/>
+      <div className="section-head">GENRE</div<TagRow values={story.metadata.genre}/>
       <div className="section-head muted-head">TAGS</div><TagRow values={story.metadata.tags} tone="dim"/>
     </section>
     <section className="hud-panel inspector-panel">
@@ -182,6 +208,8 @@ export default function App() {
   const [registryStatus, setRegistryStatus] = useState<RegistryStatusDto>({ status: 'starting', url: 'http://127.0.0.1:43217', detail: 'Starting Raphael Model Registry…' });
   const [registryCatalog, setRegistryCatalog] = useState<RegistryCatalog>({ checkpoints: [], checkpoint_total: 0, loras: [], lora_total: 0 });
   const [registryCatalogError, setRegistryCatalogError] = useState<string | null>(null);
+  const [checkpointId, setCheckpointId] = useState('');
+  const [styleLoraIds, setStyleLoraIds] = useState<string[]>([]);
 
   const loadState = async () => {
     const next = await api.getState();
@@ -265,9 +293,23 @@ export default function App() {
     };
   }, [registryStatus.status]);
 
+  useEffect(() => {
+    if (registryStatus.status === 'on' && !checkpointId && registryCatalog.checkpoints.length > 0) {
+      setCheckpointId(registryCatalog.checkpoints[0].id);
+    }
+  }, [registryStatus.status, registryCatalog.checkpoints, checkpointId]);
+
   useEffect(() => { if (!story && state?.stories[0]) void selectStory(state.stories[0].id); }, [state?.stories]);
 
-  const generateStory = async () => { if (!prompt.trim() || busy) return; setBusy(true); setError(null); try { const next = await api.createStory(prompt.trim()); setStory(next); setPrompt(''); await loadState(); } catch (e) { setError(String(e)); } finally { setBusy(false); } };
+  const generateStory = async () => {
+    if (!prompt.trim() || busy || !checkpointId || registryStatus.status !== 'on') return;
+    setBusy(true); setError(null);
+    try {
+      const visualSetup: StoryVisualSetup = { checkpoint_id: checkpointId, style_lora_ids: styleLoraIds.slice(0, 2) };
+      const next = await api.createStory(prompt.trim(), visualSetup);
+      setStory(next); setPrompt(''); await loadState();
+    } catch (e) { setError(String(e)); } finally { setBusy(false); }
+  };
   const generateNext = async () => { if (!story || busy) return; setBusy(true); setError(null); try { const next = await api.generateNextChapter(story.id, directive.trim()); setStory(next); setDirective(''); await loadState(); } catch (e) { setError(String(e)); } finally { setBusy(false); } };
   const extractScenes = async (chapter: Chapter) => {
     if (!story || extracting) return;
@@ -332,7 +374,7 @@ export default function App() {
 
       <main className="main-panel">
         {error ? <div className="error-box">{error}</div> : null}
-        {!story ? <NewStoryPanel busy={busy} prompt={prompt} setPrompt={setPrompt} onGenerate={() => void generateStory()}/> : <>
+        {!story ? <NewStoryPanel busy={busy} prompt={prompt} setPrompt={setPrompt} onGenerate={() => void generateStory()} registryStatus={registryStatus} catalog={registryCatalog} checkpointId={checkpointId} setCheckpointId={setCheckpointId} styleLoraIds={styleLoraIds} setStyleLoraIds={setStyleLoraIds}/> : <>
           <section className="story-header hud-panel">
             <div><div className="eyebrow">STORY BIBLE · {story.id.slice(0, 8).toUpperCase()}</div><h1>{story.title}</h1><p>{story.bible.premise}</p></div>
             <div className="story-header-tags"><TagRow values={story.metadata.tone} tone="tone"/></div>
