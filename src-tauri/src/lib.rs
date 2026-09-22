@@ -978,10 +978,10 @@ async fn create_story(
     }
 
     let checkpoint_artifact = registry.model_artifact(&checkpoint.id).await?;
-    let mut visual_config = StoryVisualConfig {
+    let visual_config = StoryVisualConfig {
         checkpoint_id: checkpoint.id.clone(),
         checkpoint_name: checkpoint.name.clone(),
-        checkpoint_file_name: checkpoint_artifact.file_name,
+        checkpoint_file_name: checkpoint_artifact.file_name.clone(),
         style_loras,
     };
     let style_artifacts = visual_config.style_loras.iter().map(|item| registry::RegistryModelArtifact {
@@ -1576,7 +1576,7 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
     let mut workflow: Value = serde_json::from_str(&settings.comfyui_workflow_json)
         .map_err(|e| AppError::ComfyUi(format!("workflow JSON is invalid: {e}")))?;
     let seed = (Uuid::new_v4().as_u128() & u64::MAX as u128) as u64;
-    let mut replacements = vec![
+    let replacements = vec![
         ("{{POSITIVE_PROMPT}}", Value::String(scene.positive_prompt.clone())),
         ("{{NEGATIVE_PROMPT}}", Value::String(scene.negative_prompt.clone())),
         ("{{SEED}}", Value::Number(serde_json::Number::from(seed))),
