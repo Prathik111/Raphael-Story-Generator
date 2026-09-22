@@ -70,7 +70,25 @@ The workflow itself owns the checkpoint, LoRA, sampler, resolution and other gen
 
 Use `"{{SEED}}"` as the complete value of a numeric seed field. Raphael converts that exact placeholder into a JSON number; embedded text such as `"seed={{SEED}}"` remains a string.
 
-Automatic model/LoRA discovery from Raphael Model Manager is intentionally left behind an adapter boundary for the next integration stage.
+### Dynamic LoRA workflow builder
+
+The workflow template must contain a `CheckpointLoaderSimple` or `CheckpointLoader` node. After LoRA selection, Raphael calls a deterministic workflow-builder tool with an ordered `lora_stack[]`.
+
+The tool creates one ComfyUI `LoraLoader` node per selected LoRA and connects:
+
+```
+Checkpoint
+   -> LoRA 1
+      -> LoRA 2
+         -> ...
+            -> LoRA N
+```
+
+Both MODEL and CLIP are chained through every LoRA. The final MODEL/CLIP outputs replace the original checkpoint MODEL/CLIP references in the workflow, so there is no fixed number of LoRA slots.
+
+The Story Generator supplies the stack in stable order: locked style LoRAs first, then selected character LoRAs, then the concept/pose LoRA. The selector chooses the LoRAs; the workflow builder only constructs the graph.
+
+Automatic model/LoRA discovery from the Raphael Model Manager is handled through the shared Raphael Model Registry.
 
 
 ## Local settings and secrets
