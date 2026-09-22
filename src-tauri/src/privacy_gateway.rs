@@ -142,7 +142,7 @@ async fn docker_compose_up(dir: &Path) -> AppResult<()> {
     .map_err(|error| AppError::WebResearch(format!("Docker startup task failed: {error}")))?
     .map_err(AppError::WebResearch)?;
 
-    status
+    Ok(())
 }
 
 pub async fn ensure_started_with_settings(app: &AppHandle, settings: &crate::AppSettings) -> AppResult<()> {
