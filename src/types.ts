@@ -153,7 +153,6 @@ export interface AppSettings {
   web_research_enabled: boolean;
   web_search_url: string;
   web_proxy_url: string;
-  web_require_proxy: boolean;
   web_search_max_results: number;
   web_fetch_max_chars: number;
   web_context_max_chars: number;
