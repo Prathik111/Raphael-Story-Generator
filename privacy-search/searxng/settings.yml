@@ -24,8 +24,7 @@ server:
 
 search:
   safe_search: 2
-  autocomplete: false
-  query_in_title: false
+  autocomplete: ""
   formats:
     - html
     - json
@@ -40,6 +39,9 @@ outgoing:
   proxies:
     all://:
       - "socks5h://tor:9050"
+
+ui:
+  query_in_title: false
 
 valkey:
   url: false
