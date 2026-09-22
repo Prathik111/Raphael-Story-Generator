@@ -28,7 +28,7 @@ pub struct ServiceStatusBoard {
 pub async fn probe(registry: &RegistryState, settings: &AppSettings) -> ServiceStatusBoard {
     let registry_future = registry.status();
     let searx_future = research::check_search_api(settings);
-    let comfy_future = comfyui::check_api(&settings.comfyui_url);
+    let comfy_future = comfyui::detect_api_url(&settings.comfyui_url);
     let (registry_status, searx_result, comfy_result) =
         tokio::join!(registry_future, searx_future, comfy_future);
 
@@ -65,11 +65,11 @@ pub async fn probe(registry: &RegistryState, settings: &AppSettings) -> ServiceS
     };
 
     let comfyui = match comfy_result {
-        Ok(()) => ServiceStatusDto {
+        Ok(url) => ServiceStatusDto {
             service: "comfyui".into(),
             status: ServiceHealthStatus::Online,
-            url: settings.comfyui_url.clone(),
-            detail: Some("ComfyUI API responded successfully.".into()),
+            url,
+            detail: Some("ComfyUI API detected successfully.".into()),
         },
         Err(error) => ServiceStatusDto {
             service: "comfyui".into(),
