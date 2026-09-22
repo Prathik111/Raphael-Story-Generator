@@ -46,7 +46,6 @@ pub struct RegistryModelDto {
 #[derive(Debug, Clone)]
 pub struct RegistryModelArtifact {
     pub id: String,
-    pub name: String,
     pub file_name: String,
     pub activation_prompts: Vec<String>,
 }
@@ -78,6 +77,7 @@ struct RegistryInner {
     base_url: String,
     token_path: PathBuf,
     executable: Option<PathBuf>,
+    #[allow(dead_code)]
     source_manifest: Option<PathBuf>,
     http: reqwest::Client,
     starting: AtomicBool,
@@ -308,15 +308,6 @@ impl RegistryState {
         Ok(candidates)
     }
 
-    pub async fn compatible_lora_models(&self, checkpoint_id: &str) -> AppResult<Vec<RegistryModelDto>> {
-        let client = self.client().await?;
-        let models = client
-            .compatible(checkpoint_id, Some(ModelType::Lora))
-            .await
-            .map_err(|error| AppError::Registry(format!("failed to load compatible LoRAs: {error}")))?;
-        Ok(models.into_iter().map(RegistryModelDto::from_model).collect())
-    }
-
     pub async fn model_artifact(&self, model_id: &str) -> AppResult<RegistryModelArtifact> {
         let client = self.client().await?;
         let model = client
@@ -369,7 +360,6 @@ impl RegistryState {
 
         Ok(RegistryModelArtifact {
             id: model.id,
-            name: model.name,
             file_name: file.filename,
             activation_prompts,
         })
