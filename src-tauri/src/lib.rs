@@ -11,7 +11,7 @@ use research::ResearchBundle;
 use serde::{Deserialize, Serialize};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
-use std::{collections::HashMap, fs, path::PathBuf, sync::RwLock};
+use std::{collections::HashMap, env, fs, path::{Path, PathBuf}, sync::RwLock};
 use tauri::{AppHandle, Emitter, Manager, State};
 use thiserror::Error;
 use uuid::Uuid;
@@ -1926,6 +1926,144 @@ fn get_scene_image(
     Ok(Some(format!("data:{mime};base64,{encoded}")))
 }
 
+fn model_manager_app_data_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(value) = env::var_os("RAPHAEL_MODEL_MANAGER_APP_DATA_DIR") {
+        candidates.push(PathBuf::from(value));
+    }
+
+    if let Some(value) = env::var_os("APPDATA") {
+        candidates.push(PathBuf::from(value).join("com.raphael.modelmanager"));
+    }
+
+    if let Some(value) = env::var_os("LOCALAPPDATA") {
+        candidates.push(PathBuf::from(value).join("com.raphael.modelmanager"));
+    }
+
+    if let Some(base_dirs) = directories::BaseDirs::new() {
+        candidates.push(base_dirs.data_dir().join("com.raphael.modelmanager"));
+    }
+
+    candidates
+}
+
+fn model_manager_cache_path(app_data: &Path, connection: &rusqlite::Connection) -> PathBuf {
+    connection
+        .query_row(
+            "SELECT value FROM settings WHERE key='cache_location'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| app_data.join("cache"))
+}
+
+fn cached_model_thumbnail(registry_model_id: &str) -> AppResult<Option<String>> {
+    let registry_model_id = registry_model_id.trim();
+    if registry_model_id.is_empty() {
+        return Ok(None);
+    }
+
+    for app_data in model_manager_app_data_candidates() {
+        let db_path = app_data.join("raphael.db");
+        if !db_path.is_file() {
+            continue;
+        }
+
+        let connection = match rusqlite::Connection::open_with_flags(
+            &db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        ) {
+            Ok(connection) => connection,
+            Err(_) => continue,
+        };
+
+        let cached_path = match connection.query_row(
+            "SELECT COALESCE(NULLIF(cover_path, ''), NULLIF(thumbnail_path, ''))
+             FROM models
+             WHERE registry_model_id = ?1
+             LIMIT 1",
+            [registry_model_id],
+            |row| row.get::<_, Option<String>>(0),
+        ) {
+            Ok(value) => value,
+            Err(rusqlite::Error::QueryReturnedNoRows) => continue,
+            Err(_) => continue,
+        };
+
+        let Some(cached_path) = cached_path else {
+            continue;
+        };
+
+        let cache_root = model_manager_cache_path(&app_data, &connection);
+        let requested = PathBuf::from(&cached_path);
+        let requested = if requested.is_absolute() {
+            requested
+        } else {
+            cache_root.join(requested)
+        };
+
+        let canonical_root = cache_root
+            .canonicalize()
+            .unwrap_or_else(|_| cache_root.clone());
+        let canonical_path = match requested.canonicalize() {
+            Ok(path) => path,
+            Err(_) => continue,
+        };
+
+        if !canonical_path.starts_with(&canonical_root) || !canonical_path.is_file() {
+            continue;
+        }
+
+        let metadata = fs::metadata(&canonical_path)
+            .map_err(|error| AppError::Storage(format!("failed to inspect cached model thumbnail: {error}")))?;
+        if metadata.len() > 8 * 1024 * 1024 {
+            continue;
+        }
+
+        let mime = match canonical_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "jpg" | "jpeg" => "image/jpeg",
+            "png" => "image/png",
+            "webp" => "image/webp",
+            "gif" => "image/gif",
+            "avif" => "image/avif",
+            _ => continue,
+        };
+
+        let bytes = fs::read(&canonical_path)
+            .map_err(|error| AppError::Storage(format!("failed to read cached model thumbnail: {error}")))?;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        return Ok(Some(format!("data:{mime};base64,{encoded}")));
+    }
+
+    Ok(None)
+}
+
+#[tauri::command]
+fn get_registry_model_thumbnails(
+    model_ids: Vec<String>,
+) -> AppResult<HashMap<String, String>> {
+    let mut thumbnails = HashMap::new();
+
+    for model_id in model_ids.into_iter().filter(|value| !value.trim().is_empty()).take(500) {
+        if let Some(thumbnail) = cached_model_thumbnail(&model_id)? {
+            thumbnails.insert(model_id, thumbnail);
+        }
+    }
+
+    Ok(thumbnails)
+}
+
 #[tauri::command]
 async fn get_service_status(
     store: State<'_, Store>,
@@ -1992,7 +2130,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_app_state, get_story, get_settings, save_settings, clear_llm_api_key, create_story, generate_next_chapter, extract_scenes, build_scene_prompt, queue_scene_image, get_scene_image, build_comfyui_workflow, test_private_web_research, get_service_status, registry::ensure_registry, registry::get_registry_status, registry::get_registry_models])
+        .invoke_handler(tauri::generate_handler![get_app_state, get_story, get_settings, save_settings, clear_llm_api_key, create_story, generate_next_chapter, extract_scenes, build_scene_prompt, queue_scene_image, get_scene_image, build_comfyui_workflow, test_private_web_research, get_service_status, get_registry_model_thumbnails, registry::ensure_registry, registry::get_registry_status, registry::get_registry_models])
         .run(tauri::generate_context!())
         .expect("error while running Raphael Story Generator");
 }
