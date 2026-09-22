@@ -595,6 +595,7 @@ export default function App() {
           pipeline={pipelineTrace}
           onClear={() => { setGenerationTraces([]); setPipelineTrace([]); }}
         />
+        {story ? <ResearchPanel story={story}/> : null}
         {story ? <MetadataPanel story={story}/> : <section className="hud-panel inspector-panel placeholder-inspector"><div className="section-head">PIPELINE</div><div className="pipeline-step active"><b>01</b><span>STORY BIBLE</span></div><div className="pipeline-step"><b>02</b><span>CHAPTERS</span></div><div className="pipeline-step"><b>03</b><span>SCENE EXTRACTION</span></div><div className="pipeline-step"><b>04</b><span>IMAGE BUILDER</span></div><div className="pipeline-note">The story engine is designed so scene extraction and ComfyUI image generation can run without changing the story canon.</div></section>}
       </aside>
     </div>
