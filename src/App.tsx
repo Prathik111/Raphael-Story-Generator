@@ -59,8 +59,8 @@ function RegistryPanel({ status, catalog, error }: { status: RegistryStatusDto; 
     </div>
     {status.status === 'on' ? <>
       <div className="registry-counts">
-        <div><span>CHECKPOINTS</span><b>{catalog.checkpoints.length}</b></div>
-        <div><span>LORAS</span><b>{catalog.loras.length}</b></div>
+        <div><span>CHECKPOINTS</span><b>{catalog.checkpoint_total}</b></div>
+        <div><span>LORAS</span><b>{catalog.lora_total}</b></div>
       </div>
       {error ? <div className="registry-error">{error}</div> : null}
       <div className="registry-list-group">
@@ -180,7 +180,7 @@ export default function App() {
   const [busy, setBusy] = useState(false); const [extracting, setExtracting] = useState(false); const [buildingPrompt, setBuildingPrompt] = useState<string | null>(null); const [queueing, setQueueing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null); const [settingsOpen, setSettingsOpen] = useState(false); const [promptPreview, setPromptPreview] = useState<Scene | null>(null);
   const [registryStatus, setRegistryStatus] = useState<RegistryStatusDto>({ status: 'starting', url: 'http://127.0.0.1:43217', detail: 'Starting Raphael Model Registry…' });
-  const [registryCatalog, setRegistryCatalog] = useState<RegistryCatalog>({ checkpoints: [], loras: [] });
+  const [registryCatalog, setRegistryCatalog] = useState<RegistryCatalog>({ checkpoints: [], checkpoint_total: 0, loras: [], lora_total: 0 });
   const [registryCatalogError, setRegistryCatalogError] = useState<string | null>(null);
 
   const loadState = async () => {
@@ -238,7 +238,7 @@ export default function App() {
 
   useEffect(() => {
     if (registryStatus.status !== 'on') {
-      setRegistryCatalog({ checkpoints: [], loras: [] });
+      setRegistryCatalog({ checkpoints: [], checkpoint_total: 0, loras: [], lora_total: 0 });
       setRegistryCatalogError(null);
       return;
     }
@@ -252,7 +252,7 @@ export default function App() {
         setRegistryCatalogError(null);
       } catch (error) {
         if (disposed) return;
-        setRegistryCatalog({ checkpoints: [], loras: [] });
+        setRegistryCatalog({ checkpoints: [], checkpoint_total: 0, loras: [], lora_total: 0 });
         setRegistryCatalogError(String(error));
       }
     };
