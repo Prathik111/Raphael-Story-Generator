@@ -14,6 +14,10 @@ function toErrorMessage(error: unknown): string {
   try { return JSON.stringify(error); } catch { return 'Unexpected error'; }
 }
 
+function BackgroundRaphael() {
+  return <div className="background-raphael" aria-hidden="true"><PulseMark /></div>;
+}
+
 function splitTags(values: string[]) { return values.filter(Boolean).slice(0, 12); }
 
 function formatDate(value: string) {
@@ -389,7 +393,7 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
 
       <div className="section-head setting-gap">COMFYUI</div>
       <label>API URL<input value={draft.comfyui_url} onChange={e => setDraft({ ...draft, comfyui_url: e.target.value })} placeholder="http://127.0.0.1:8188"/></label>
-      <label>API workflow template<small className="settings-hint">Use POSITIVE_PROMPT, NEGATIVE_PROMPT, SEED, STORY_ID, SCENE_ID and CHECKPOINT placeholders. The workflow must contain a CheckpointLoaderSimple or CheckpointLoader node. Raphael's workflow-builder tool inserts one LoraLoader node per selected LoRA and chains MODEL + CLIP through the full stack automatically.</small><textarea className="workflow-input" value={draft.comfyui_workflow_json} onChange={e => setDraft({ ...draft, comfyui_workflow_json: e.target.value })} placeholder='Paste a ComfyUI API workflow JSON template here...'/></label>
+      <label>API workflow template<small className="settings-hint">Use POSITIVE_PROMPT, NEGATIVE_PROMPT, SEED, STORY_ID, SCENE_ID and CHECKPOINT placeholders, plus IMAGE_WIDTH and IMAGE_HEIGHT (or IMAGE_SIZE). Raphael requires the workflow to expose an image-size injection point: an Empty*Latent node with width/height inputs or the size placeholders. The workflow must contain a CheckpointLoaderSimple or CheckpointLoader node. Raphael's workflow-builder inserts one LoraLoader node per selected LoRA and chains MODEL + CLIP through the full stack.</small><textarea className="workflow-input" value={draft.comfyui_workflow_json} onChange={e => setDraft({ ...draft, comfyui_workflow_json: e.target.value })} placeholder='Paste a ComfyUI API workflow JSON template here...'/></label>
     </div>
     {saveError ? <div className="settings-inline-error error-box">{saveError}</div> : null}
     <footer className="settings-footer"><button className="secondary-btn" onClick={onClose}>CANCEL</button><button className="primary-btn" onClick={() => void save()} disabled={busy}>{busy ? 'SAVING…' : 'SAVE SETTINGS'}</button></footer>
@@ -696,9 +700,10 @@ export default function App() {
   );
 
   return <div className="app-shell">
+    <BackgroundRaphael />
     <header className="topbar">
       <div className="brand"><PulseMark/><div><div className="brand-title">RAPHAEL</div><div className="brand-subtitle">STORY GENERATOR</div></div></div>
-      <div className="top-status"><span className={state.llm_configured ? 'status-ok' : 'status-warn'}>LLM {state.llm_configured ? 'READY' : 'NOT CONFIGURED'}</span><span className={`registry-health ${registryStatus.status}`} title={registryStatus.detail || registryStatus.url}><i />REGISTRY {registryStatus.status === 'on' ? 'ON' : registryStatus.status === 'starting' ? 'STARTING' : 'OFF'}</span><span className={'service-inline ' + serviceStatus.searxng.status}>SEARXNG {serviceStatus.searxng.status.toUpperCase()}</span><span className={'service-inline ' + serviceStatus.comfyui.status}>COMFYUI {serviceStatus.comfyui.status.toUpperCase()}</span><span>SCENES {totalScenes}</span><span className={generationTraces.some(g => g.status === 'started' || g.status === 'token') ? 'status-ok' : ''}>TRACE {generationTraces.length}</span><button className="icon-btn" onClick={() => setSettingsOpen(true)} title="Engine settings">⚙</button></div>
+      <div className="top-status"><span className={state.llm_configured ? 'status-ok' : 'status-warn'}>LLM {state.llm_configured ? 'READY' : 'NOT CONFIGURED'}</span><span className={`registry-health ${serviceStatus.registry.status}`} title={serviceStatus.registry.detail || serviceStatus.registry.url}><i />REGISTRY {serviceStatus.registry.status.toUpperCase()}</span><span className={'service-inline ' + serviceStatus.searxng.status}>SEARXNG {serviceStatus.searxng.status.toUpperCase()}</span><span className={'service-inline ' + serviceStatus.comfyui.status}>COMFYUI {serviceStatus.comfyui.status.toUpperCase()}</span><span>SCENES {totalScenes}</span><span className={generationTraces.some(g => g.status === 'started' || g.status === 'token') ? 'status-ok' : ''}>TRACE {generationTraces.length}</span><button className="icon-btn" onClick={() => setSettingsOpen(true)} title="Engine settings">⚙</button></div>
     </header>
 
     <div className="workspace">
@@ -709,7 +714,7 @@ export default function App() {
       </aside>
 
       <main className="main-panel">
-        {error ? <div className="error-box">{error}</div> : null}
+        {error ? <div className="error-banner error-box" role="alert"><strong>PIPELINE ERROR</strong><span>{error}</span><button type="button" className="mini-btn" onClick={() => setError(null)}>DISMISS</button></div> : null}
         {!story ? <NewStoryPanel busy={busy} prompt={prompt} setPrompt={setPrompt} onGenerate={() => void generateStory()} registryStatus={registryStatus} catalog={registryCatalog} checkpointId={checkpointId} setCheckpointId={setCheckpointId} styleLoraIds={styleLoraIds} setStyleLoraIds={setStyleLoraIds}/> : <>
           <section className="story-header hud-panel">
             <div><div className="eyebrow">STORY BIBLE · {story.id.slice(0, 8).toUpperCase()}</div><h1>{story.title}</h1><p>{story.bible.premise}</p><label className="chapter-selector">VIEW CHAPTER<select value={selectedChapterNumber ?? story.chapters[story.chapters.length - 1]?.number ?? 1} onChange={e => setSelectedChapterNumber(Number(e.target.value))}>{story.chapters.map(chapter => <option key={chapter.number} value={chapter.number}>CHAPTER {chapter.number} · {chapter.title}</option>)}</select></label></div>
@@ -740,7 +745,7 @@ export default function App() {
       </aside>
     </div>
 
-    {promptPreview ? <div className="overlay" onMouseDown={() => setPromptPreview(null)}><section className="prompt-viewer hud-panel" onMouseDown={e => e.stopPropagation()}><header className="settings-header"><div><div className="eyebrow">IMAGE BUILDER</div><h2>SCENE {String(promptPreview.order).padStart(2, '0')} PROMPTS</h2></div><button className="settings-close" onClick={() => setPromptPreview(null)}>×</button></header><div className="prompt-viewer-body"><div><div className="section-head">POSITIVE PROMPT</div><pre className="prompt-box">{promptPreview.positive_prompt}</pre></div><div><div className="section-head">NEGATIVE PROMPT</div><pre className="prompt-box">{promptPreview.negative_prompt}</pre></div></div></section></div> : null}
+    {promptPreview ? <div className="overlay" onMouseDown={() => setPromptPreview(null)}><section className="prompt-viewer hud-panel" onMouseDown={e => e.stopPropagation()}><header className="settings-header"><div><div className="eyebrow">IMAGE BUILDER</div><h2>SCENE {String(promptPreview.order).padStart(2, '0')} PROMPTS</h2></div><button className="settings-close" onClick={() => setPromptPreview(null)}>×</button></header><div className="prompt-viewer-body"><div><div className="section-head">IMAGE SIZE</div><div className="scene-image-size prompt-size">{promptPreview.image_width}×{promptPreview.image_height}</div><div className="section-head">POSITIVE PROMPT</div><pre className="prompt-box">{promptPreview.positive_prompt}</pre></div><div><div className="section-head">NEGATIVE PROMPT</div><pre className="prompt-box">{promptPreview.negative_prompt}</pre></div></div></section></div> : null}
     {settingsOpen ? <SettingsOverlay
       settings={state.settings}
       llmApiKeyConfigured={state.llm_api_key_configured}
