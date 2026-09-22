@@ -125,31 +125,6 @@ fn next_numeric_node_id(workflow: &Map<String, Value>) -> i64 {
         + 1
 }
 
-fn collect_model_clip_refs(value: &Value, checkpoint_node: &str, output_index: usize, out: &mut Vec<Vec<Value>>) {
-    match value {
-        Value::Array(items) if items.len() == 2 => {
-            if items[0].as_str() == Some(checkpoint_node) && items[1].as_u64() == Some(output_index as u64) {
-                out.push(items.clone());
-                return;
-            }
-            for item in items {
-                collect_model_clip_refs(item, checkpoint_node, output_index, out);
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                collect_model_clip_refs(item, checkpoint_node, output_index, out);
-            }
-        }
-        Value::Object(map) => {
-            for item in map.values() {
-                collect_model_clip_refs(item, checkpoint_node, output_index, out);
-            }
-        }
-        _ => {}
-    }
-}
-
 fn replace_exact_refs_in_original_nodes(
     nodes: &mut Map<String, Value>,
     original_node_ids: &HashSet<String>,
@@ -308,7 +283,16 @@ mod tests {
                     "model": ["1", 0],
                     "positive": ["2", 0],
                     "negative": ["3", 0],
+                    "latent_image": ["5", 0],
                     "seed": 1
+                }
+            },
+            "5": {
+                "class_type": "EmptyLatentImage",
+                "inputs": {
+                    "width": 1024,
+                    "height": 1024,
+                    "batch_size": 1
                 }
             }
         })
@@ -331,12 +315,14 @@ mod tests {
         assert_eq!(result.lora_node_ids.len(), 3);
         let workflow = result.workflow.as_object().unwrap();
 
-        assert_eq!(workflow["5"]["inputs"]["model"], json!(["1", 0]));
-        assert_eq!(workflow["6"]["inputs"]["model"], json!(["5", 0]));
+        assert_eq!(workflow["6"]["inputs"]["model"], json!(["1", 0]));
         assert_eq!(workflow["7"]["inputs"]["model"], json!(["6", 0]));
-        assert_eq!(workflow["2"]["inputs"]["clip"], json!(["7", 1]));
-        assert_eq!(workflow["3"]["inputs"]["clip"], json!(["7", 1]));
-        assert_eq!(workflow["4"]["inputs"]["model"], json!(["7", 0]));
+        assert_eq!(workflow["8"]["inputs"]["model"], json!(["7", 0]));
+        assert_eq!(workflow["2"]["inputs"]["clip"], json!(["8", 1]));
+        assert_eq!(workflow["3"]["inputs"]["clip"], json!(["8", 1]));
+        assert_eq!(workflow["4"]["inputs"]["model"], json!(["8", 0]));
+        assert_eq!(workflow["5"]["inputs"]["width"], json!(1024));
+        assert_eq!(workflow["5"]["inputs"]["height"], json!(1024));
     }
 
     #[test]
@@ -348,23 +334,39 @@ mod tests {
             lora_stack: Vec::new(),
             image_width: 1024,
             image_height: 1024,
-            image_width: 1024,
-            image_height: 1024,
         }).unwrap();
 
         assert_eq!(result.workflow, input);
     }
 
     #[test]
+    fn injects_requested_image_size() {
+        let mut workflow = base_workflow();
+        workflow["5"]["inputs"]["width"] = json!("{{IMAGE_WIDTH}}");
+        workflow["5"]["inputs"]["height"] = json!("{{IMAGE_HEIGHT}}");
+        let result = build_workflow(WorkflowBuildRequest {
+            workflow,
+            checkpoint_node: None,
+            lora_stack: Vec::new(),
+            image_width: 1216,
+            image_height: 832,
+        }).unwrap();
+        assert_eq!(result.workflow["5"]["inputs"]["width"], json!(1216));
+        assert_eq!(result.workflow["5"]["inputs"]["height"], json!(832));
+    }
+
+    #[test]
     fn rejects_missing_checkpoint_node() {
         let result = build_workflow(WorkflowBuildRequest {
-            workflow: json!({ "1": { "class_type": "KSampler", "inputs": {} } }),
-            checkpoint_node: None,
+            workflow: base_workflow(),
+            checkpoint_node: Some("missing".into()),
             lora_stack: vec![WorkflowLoraInput {
                 file_name: "style.safetensors".into(),
                 weight: 0.7,
                 clip_weight: None,
             }],
+            image_width: 1024,
+            image_height: 1024,
         });
         assert!(result.is_err());
     }
