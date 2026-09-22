@@ -15,7 +15,7 @@ server:
   public_instance: false
   image_proxy: false
   method: "POST"
-  secret_key: "\${SEARXNG_SECRET}"
+  secret_key: "__RAPHAEL_SECRET__"
   default_http_headers:
     X-Content-Type-Options: "nosniff"
     X-Download-Options: "noopen"
