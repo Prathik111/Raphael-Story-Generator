@@ -467,6 +467,26 @@ html{scrollbar-color:rgba(168,216,240,.28) rgba(0,0,0,.18);scrollbar-width:thin}
 .registry-choice-visual b{transform:rotate(114deg);border-color:rgba(255,255,255,.08)}
 .registry-choice-visual.lora{background:radial-gradient(circle at 50% 45%,rgba(229,226,198,.13),transparent 36%),linear-gradient(145deg,rgba(255,255,255,.05),rgba(0,0,0,.08))}
 .registry-choice-visual.lora span{color:rgba(229,226,198,.7)}
+.registry-choice-visual img{
+  position:absolute;
+  inset:0;
+  z-index:1;
+  display:block;
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  object-position:center;
+  opacity:.82;
+  filter:saturate(.78) contrast(.94) brightness(.82);
+}
+.registry-choice-visual img + span{z-index:3}
+.registry-choice-visual img ~ i,
+.registry-choice-visual img ~ b{z-index:2}
+.registry-choice-card:hover .registry-choice-visual img,
+.registry-choice-card.selected .registry-choice-visual img{
+  opacity:.94;
+  filter:saturate(.86) contrast(1) brightness(.88);
+}
 .registry-choice-body{padding:10px 11px 12px}
 .registry-choice-body strong{
   display:block;
