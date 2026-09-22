@@ -46,7 +46,9 @@ pub struct RegistryModelDto {
 #[derive(Debug, Clone, Serialize)]
 pub struct RegistryCatalogDto {
     pub checkpoints: Vec<RegistryModelDto>,
+    pub checkpoint_total: i64,
     pub loras: Vec<RegistryModelDto>,
+    pub lora_total: i64,
 }
 
 #[derive(Clone)]
@@ -235,28 +237,28 @@ impl RegistryState {
 
     async fn catalog(&self) -> AppResult<RegistryCatalogDto> {
         let client = self.client().await?;
-        let checkpoints = client
+        let checkpoint_result = client
             .search(ModelSearch {
                 model_type: Some(ModelType::Checkpoint),
                 limit: 200,
                 ..Default::default()
             })
             .await
-            .map_err(|error| AppError::Registry(format!("failed to load checkpoints: {error}")))?
-            .items;
-        let loras = client
+            .map_err(|error| AppError::Registry(format!("failed to load checkpoints: {error}")))?;
+        let lora_result = client
             .search(ModelSearch {
                 model_type: Some(ModelType::Lora),
                 limit: 200,
                 ..Default::default()
             })
             .await
-            .map_err(|error| AppError::Registry(format!("failed to load LoRAs: {error}")))?
-            .items;
+            .map_err(|error| AppError::Registry(format!("failed to load LoRAs: {error}")))?;
 
         Ok(RegistryCatalogDto {
-            checkpoints: checkpoints.into_iter().map(RegistryModelDto::from_model).collect(),
-            loras: loras.into_iter().map(RegistryModelDto::from_model).collect(),
+            checkpoint_total: checkpoint_result.total,
+            checkpoints: checkpoint_result.items.into_iter().map(RegistryModelDto::from_model).collect(),
+            lora_total: lora_result.total,
+            loras: lora_result.items.into_iter().map(RegistryModelDto::from_model).collect(),
         })
     }
 }
