@@ -20,6 +20,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots", "url"] }
 base64 = "0.22"
 directories = "6"
+rusqlite = { version = "0.32", features = ["bundled"] }
 futures-util = "0.3"
 regex = "1"
 scraper = "0.24"
