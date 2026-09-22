@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from './tauri';
-import type { AppSettings, AppState, Chapter, Scene, Story } from './types';
+import type { AppSettings, AppState, Chapter, RegistryCatalog, RegistryStatusDto, Scene, Story } from './types';
 
 function PulseMark() {
   return <div className="raphael-core" aria-label="Raphael"><span className="core-dot"/><i className="core-orbit orbit-a"/><i className="core-orbit orbit-b"/><i className="core-orbit orbit-c"/></div>;
@@ -36,6 +36,42 @@ function NewStoryPanel({ busy, prompt, setPrompt, onGenerate }: { busy: boolean;
     <p className="hero-copy">Describe the story, characters, world and mood you have in mind. Raphael extracts the canon, generates the introduction and Chapter 1, then keeps the story state for every continuation.</p>
     <textarea className="story-prompt" value={prompt} onChange={event => setPrompt(event.target.value)} placeholder="Example: A dark fantasy anime about a quiet 17-year-old academy student who discovers that the rival she dislikes is protecting a secret tied to her family..." disabled={busy} rows={6}/>
     <div className="hero-actions"><button className="primary-btn" onClick={onGenerate} disabled={busy || !prompt.trim()}>{busy ? 'BUILDING STORY BIBLE…' : 'GENERATE STORY'}</button><span className="tiny">INTRODUCTION + CHAPTER 1 · CANONICAL STATE SAVED</span></div>
+  </section>;
+}
+
+
+function RegistryPanel({ status, catalog, error }: { status: RegistryStatusDto; catalog: RegistryCatalog; error: string | null }) {
+  const statusLabel = status.status === 'on' ? 'ON' : status.status === 'starting' ? 'STARTING' : 'OFF';
+  const renderModelList = (models: RegistryCatalog['checkpoints']) => models.slice(0, 6).map(model => (
+    <div className="registry-model" key={model.id} title={model.base_model ? `${model.name} · ${model.base_model}` : model.name}>
+      <span>{model.name}</span>
+      <small>{model.base_model || 'BASE UNKNOWN'}</small>
+    </div>
+  ));
+
+  return <section className="hud-panel inspector-panel registry-panel">
+    <div className="registry-panel-head">
+      <div>
+        <div className="section-head">MODEL REGISTRY</div>
+        <span className="tiny">{status.url}</span>
+      </div>
+      <span className={\`registry-state \${status.status}\`}><i />{statusLabel}</span>
+    </div>
+    {status.status === 'on' ? <>
+      <div className="registry-counts">
+        <div><span>CHECKPOINTS</span><b>{catalog.checkpoint_total}</b></div>
+        <div><span>LORAS</span><b>{catalog.lora_total}</b></div>
+      </div>
+      {error ? <div className="registry-error">{error}</div> : null}
+      <div className="registry-list-group">
+        <div className="registry-list-title">CHECKPOINTS</div>
+        {catalog.checkpoints.length ? renderModelList(catalog.checkpoints) : <div className="registry-empty">No checkpoints registered.</div>}
+      </div>
+      <div className="registry-list-group">
+        <div className="registry-list-title">LORAS</div>
+        {catalog.loras.length ? renderModelList(catalog.loras) : <div className="registry-empty">No LoRAs registered.</div>}
+      </div>
+    </> : <div className="registry-offline">{status.detail || (status.status === 'starting' ? 'Starting Raphael Model Registry…' : 'Registry is not running.')}</div>}
   </section>;
 }
 
@@ -143,6 +179,9 @@ export default function App() {
   const [prompt, setPrompt] = useState(''); const [directive, setDirective] = useState('');
   const [busy, setBusy] = useState(false); const [extracting, setExtracting] = useState(false); const [buildingPrompt, setBuildingPrompt] = useState<string | null>(null); const [queueing, setQueueing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null); const [settingsOpen, setSettingsOpen] = useState(false); const [promptPreview, setPromptPreview] = useState<Scene | null>(null);
+  const [registryStatus, setRegistryStatus] = useState<RegistryStatusDto>({ status: 'starting', url: 'http://127.0.0.1:43217', detail: 'Starting Raphael Model Registry…' });
+  const [registryCatalog, setRegistryCatalog] = useState<RegistryCatalog>({ checkpoints: [], checkpoint_total: 0, loras: [], lora_total: 0 });
+  const [registryCatalogError, setRegistryCatalogError] = useState<string | null>(null);
 
   const loadState = async () => {
     const next = await api.getState();
@@ -160,6 +199,72 @@ export default function App() {
     }
   };
   useEffect(() => { void loadState().catch(e => setError(String(e))); }, []);
+  useEffect(() => {
+    let disposed = false;
+    const apply = (next: RegistryStatusDto) => {
+      if (!disposed) setRegistryStatus(next);
+    };
+
+    setRegistryStatus(current => ({ ...current, status: 'starting', detail: 'Starting Raphael Model Registry…' }));
+    void api.ensureRegistry()
+      .then(apply)
+      .catch(error => {
+        if (!disposed) {
+          setRegistryStatus({
+            status: 'off',
+            url: 'http://127.0.0.1:43217',
+            detail: String(error),
+          });
+        }
+      });
+
+    const timer = window.setInterval(() => {
+      void api.getRegistryStatus().then(apply).catch(error => {
+        if (!disposed) {
+          setRegistryStatus(current => ({
+            ...current,
+            status: 'off',
+            detail: String(error),
+          }));
+        }
+      });
+    }, 1500);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (registryStatus.status !== 'on') {
+      setRegistryCatalog({ checkpoints: [], checkpoint_total: 0, loras: [], lora_total: 0 });
+      setRegistryCatalogError(null);
+      return;
+    }
+
+    let disposed = false;
+    const loadModels = async () => {
+      try {
+        const catalog = await api.getRegistryModels();
+        if (disposed) return;
+        setRegistryCatalog(catalog);
+        setRegistryCatalogError(null);
+      } catch (error) {
+        if (disposed) return;
+        setRegistryCatalog({ checkpoints: [], checkpoint_total: 0, loras: [], lora_total: 0 });
+        setRegistryCatalogError(String(error));
+      }
+    };
+
+    void loadModels();
+    const timer = window.setInterval(() => void loadModels(), 5000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [registryStatus.status]);
+
   useEffect(() => { if (!story && state?.stories[0]) void selectStory(state.stories[0].id); }, [state?.stories]);
 
   const generateStory = async () => { if (!prompt.trim() || busy) return; setBusy(true); setError(null); try { const next = await api.createStory(prompt.trim()); setStory(next); setPrompt(''); await loadState(); } catch (e) { setError(String(e)); } finally { setBusy(false); } };
@@ -215,7 +320,7 @@ export default function App() {
   return <div className="app-shell">
     <header className="topbar">
       <div className="brand"><PulseMark/><div><div className="brand-title">RAPHAEL</div><div className="brand-subtitle">STORY GENERATOR</div></div></div>
-      <div className="top-status"><span className={state.llm_configured ? 'status-ok' : 'status-warn'}>LLM {state.llm_configured ? 'READY' : 'NOT CONFIGURED'}</span><span>SCENES {totalScenes}</span><button className="icon-btn" onClick={() => setSettingsOpen(true)} title="Engine settings">⚙</button></div>
+      <div className="top-status"><span className={state.llm_configured ? 'status-ok' : 'status-warn'}>LLM {state.llm_configured ? 'READY' : 'NOT CONFIGURED'}</span><span className={`registry-health ${registryStatus.status}`} title={registryStatus.detail || registryStatus.url}><i />REGISTRY {registryStatus.status === 'on' ? 'ON' : registryStatus.status === 'starting' ? 'STARTING' : 'OFF'}</span><span>SCENES {totalScenes}</span><button className="icon-btn" onClick={() => setSettingsOpen(true)} title="Engine settings">⚙</button></div>
     </header>
 
     <div className="workspace">
@@ -244,7 +349,10 @@ export default function App() {
         </>}
       </main>
 
-      {story ? <MetadataPanel story={story}/> : <aside className="inspector placeholder-inspector"><section className="hud-panel inspector-panel"><div className="section-head">PIPELINE</div><div className="pipeline-step active"><b>01</b><span>STORY BIBLE</span></div><div className="pipeline-step"><b>02</b><span>CHAPTERS</span></div><div className="pipeline-step"><b>03</b><span>SCENE EXTRACTION</span></div><div className="pipeline-step"><b>04</b><span>IMAGE BUILDER</span></div><div className="pipeline-note">The story engine is designed so scene extraction and ComfyUI image generation can run without changing the story canon.</div></section></aside>}
+      <aside className="inspector">
+        <RegistryPanel status={registryStatus} catalog={registryCatalog} error={registryCatalogError}/>
+        {story ? <MetadataPanel story={story}/> : <section className="hud-panel inspector-panel placeholder-inspector"><div className="section-head">PIPELINE</div><div className="pipeline-step active"><b>01</b><span>STORY BIBLE</span></div><div className="pipeline-step"><b>02</b><span>CHAPTERS</span></div><div className="pipeline-step"><b>03</b><span>SCENE EXTRACTION</span></div><div className="pipeline-step"><b>04</b><span>IMAGE BUILDER</span></div><div className="pipeline-note">The story engine is designed so scene extraction and ComfyUI image generation can run without changing the story canon.</div></section>}
+      </aside>
     </div>
 
     {promptPreview ? <div className="overlay" onMouseDown={() => setPromptPreview(null)}><section className="prompt-viewer hud-panel" onMouseDown={e => e.stopPropagation()}><header className="settings-header"><div><div className="eyebrow">IMAGE BUILDER</div><h2>SCENE {String(promptPreview.order).padStart(2, '0')} PROMPTS</h2></div><button className="settings-close" onClick={() => setPromptPreview(null)}>×</button></header><div className="prompt-viewer-body"><div><div className="section-head">POSITIVE PROMPT</div><pre className="prompt-box">{promptPreview.positive_prompt}</pre></div><div><div className="section-head">NEGATIVE PROMPT</div><pre className="prompt-box">{promptPreview.negative_prompt}</pre></div></div></section></div> : null}
