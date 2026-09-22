@@ -18,6 +18,8 @@ function BackgroundRaphael() {
   return <div className="background-raphael" aria-hidden="true"><PulseMark /></div>;
 }
 
+const MODEL_MANAGER_THUMBNAIL_BASE_URL = 'http://127.0.0.1:1421/api/public/model-thumbnail/';
+
 function splitTags(values: string[]) { return values.filter(Boolean).slice(0, 12); }
 
 function formatDate(value: string) {
@@ -60,7 +62,13 @@ function RegistryModelChoiceCard({
     onClick={onClick}
     disabled={disabled}
   >
-    <div className={"registry-choice-visual " + kind} aria-hidden="true">
+    <div className={"registry-choice-visual " + kind}>
+      <img
+        src={MODEL_MANAGER_THUMBNAIL_BASE_URL + encodeURIComponent(model.id)}
+        alt=""
+        loading="lazy"
+        onError={event => { event.currentTarget.style.display = "none"; }}
+      />
       <span>{mark}</span>
       <i />
       <b />
