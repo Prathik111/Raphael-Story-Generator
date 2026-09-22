@@ -1,3 +1,4 @@
+mod privacy_gateway;
 mod registry;
 mod research;
 mod workflow_builder;
@@ -994,6 +995,9 @@ async fn create_story(
     if settings.llm_model.trim().is_empty() { return Err(AppError::Llm("configure an LLM model in settings".into())); }
 
     let research_bundle = if settings.web_research_enabled {
+        emit_pipeline(store.app(), "web_gateway", "started", "Ensuring the private web research gateway is running");
+        privacy_gateway::ensure_started_with_settings(store.app(), &settings).await?;
+        emit_pipeline(store.app(), "web_gateway", "completed", "Private web research gateway is ready");
         emit_pipeline(store.app(), "web_research", "started", "Searching the web through the private local research gateway");
         match research::research_web(store.app(), &settings, &prompt).await {
             Ok(bundle) => {
@@ -1144,6 +1148,9 @@ Text: {}", c.title, c.summary, c.events, c.text)).unwrap_or_default();
     let directive = if user_prompt.trim().is_empty() { "(none — continue naturally)" } else { user_prompt.trim() };
 
     if settings.web_research_enabled && !user_prompt.trim().is_empty() {
+        emit_pipeline(store.app(), "web_gateway", "started", "Ensuring the private web research gateway is running");
+        privacy_gateway::ensure_started_with_settings(store.app(), &settings).await?;
+        emit_pipeline(store.app(), "web_gateway", "completed", "Private web research gateway is ready");
         emit_pipeline(store.app(), "web_research", "started", format!("Researching the Chapter {} directive privately", next_number));
         match research::research_web(store.app(), &settings, &format!("{}: {}", story.title, user_prompt.trim())).await {
             Ok(bundle) => {
@@ -1660,8 +1667,8 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
 #[tauri::command]
 async fn test_private_web_research(store: State<'_, Store>) -> AppResult<String> {
     let settings = store.settings.read().map_err(|e| AppError::Storage(e.to_string()))?.clone();
-    research::check_private_search(&settings).await?;
-    Ok("Private web research gateway is reachable and the local proxy is configured.".into())
+    privacy_gateway::ensure_started_with_settings(store.app(), &settings).await?;
+    Ok("Private web research gateway is running and Tor routing is verified.".into())
 }
 
 pub fn run() {
@@ -1672,7 +1679,24 @@ pub fn run() {
             let store = Store::new(app.handle()).map_err(|e| {
                 std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
             })?;
+            let web_settings = store
+                .settings
+                .read()
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
+                .clone();
             app.manage(store);
+
+            if web_settings.web_research_enabled {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) =
+                        privacy_gateway::ensure_started_with_settings(&handle, &web_settings).await
+                    {
+                        eprintln!("Raphael private web research gateway startup failed: {error}");
+                    }
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![get_app_state, get_story, get_settings, save_settings, create_story, generate_next_chapter, extract_scenes, build_scene_prompt, queue_scene_image, build_comfyui_workflow, test_private_web_research, registry::ensure_registry, registry::get_registry_status, registry::get_registry_models])
