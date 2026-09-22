@@ -691,3 +691,71 @@ pub async fn check_private_search(settings: &AppSettings) -> AppResult<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn public_search_endpoints_are_rejected() {
+        assert!(ensure_local_endpoint("https://example.com", "web search").is_err());
+        assert!(ensure_local_proxy("socks5h://example.com:9050").is_err());
+    }
+
+    #[test]
+    fn source_validation_rejects_local_targets() {
+        assert!(validate_source_url("http://127.0.0.1:8188").is_err());
+        assert!(validate_source_url("http://localhost/internal").is_err());
+        assert!(validate_source_url("https://127.0.0.1/example").is_err());
+    }
+
+    #[test]
+    fn research_merge_rewrites_source_ids() {
+        let mut target = ResearchBundle {
+            queries: vec!["first".into()],
+            sources: vec![ResearchSource {
+                id: "S1".into(),
+                title: "Existing".into(),
+                url: "https://example.org/existing".into(),
+                snippet: String::new(),
+                content: String::new(),
+            }],
+            facts: Vec::new(),
+            retrieved_at: "unix:1".into(),
+        };
+
+        let incoming = ResearchBundle {
+            queries: vec!["second".into()],
+            sources: vec![
+                ResearchSource {
+                    id: "S1".into(),
+                    title: "Existing".into(),
+                    url: "https://example.org/existing".into(),
+                    snippet: String::new(),
+                    content: String::new(),
+                },
+                ResearchSource {
+                    id: "S2".into(),
+                    title: "New".into(),
+                    url: "https://example.org/new".into(),
+                    snippet: String::new(),
+                    content: String::new(),
+                },
+            ],
+            facts: vec![ResearchFact {
+                claim: "A sourced fact".into(),
+                evidence: "Evidence".into(),
+                source_ids: vec!["S2".into()],
+                confidence: "high".into(),
+            }],
+            retrieved_at: "unix:2".into(),
+        };
+
+        merge_into(&mut target, incoming);
+
+        assert_eq!(target.sources.len(), 2);
+        assert_eq!(target.sources[1].id, "S2");
+        assert_eq!(target.facts[0].source_ids, vec!["S2"]);
+        assert!(target.queries.contains(&"second".to_string()));
+    }
+}
