@@ -1934,12 +1934,12 @@ fn get_scene_image(
 async fn get_service_status(
     store: State<'_, Store>,
     registry: State<'_, registry::RegistryState>,
-) -> service_status::ServiceStatusBoard {
+) -> AppResult<service_status::ServiceStatusBoard> {
     let settings = match store.settings.read() {
         Ok(value) => value.clone(),
         Err(_) => AppSettings::default(),
     };
-    service_status::probe(&registry, &settings).await
+    Ok(service_status::probe(&registry, &settings).await)
 }
 
 #[tauri::command]
