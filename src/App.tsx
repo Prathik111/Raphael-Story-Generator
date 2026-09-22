@@ -142,6 +142,43 @@ function IntroductionView({ story }: { story: Story }) {
   </section>;
 }
 
+function ResearchPanel({ story }: { story: Story }) {
+  const research = story.research;
+  return <section className="hud-panel inspector-panel research-panel">
+    <div className="panel-title-row">
+      <div>
+        <div className="section-head">PRIVATE WEB RESEARCH</div>
+        <span className="tiny">LOCAL SEARXNG · TOR · SOURCE-BACKED FACTS</span>
+      </div>
+      <span className="status-chip">{research.sources.length} SOURCES</span>
+    </div>
+    {research.facts.length === 0 ? (
+      <div className="registry-empty">No external research facts were stored for this story.</div>
+    ) : (
+      <div className="research-facts">
+        {research.facts.slice(0, 8).map((fact, index) => (
+          <article className="research-fact" key={index}>
+            <strong>{fact.claim}</strong>
+            <small>{fact.source_ids.join(' · ')} · {fact.confidence.toUpperCase()}</small>
+            <p>{fact.evidence}</p>
+          </article>
+        ))}
+      </div>
+    )}
+    {research.sources.length ? (
+      <div className="research-sources">
+        <div className="section-head muted-head">SOURCES</div>
+        {research.sources.slice(0, 8).map(source => (
+          <div className="research-source" key={source.id}>
+            <span className="research-source-id">{source.id}</span>
+            <div><strong>{source.title || source.url}</strong><small>{source.url}</small></div>
+          </div>
+        ))}
+      </div>
+    ) : null}
+  </section>;
+}
+
 function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPrompt, onViewPrompt, onQueueImage, buildingPrompt, queueing }: { story: Story; chapter: Chapter; onExtractScenes: () => void; extracting: boolean; onBuildPrompt: (scene: Scene) => void; onViewPrompt: (scene: Scene) => void; onQueueImage: (scene: Scene) => void; buildingPrompt: string | null; queueing: string | null; }) {
   return <div className="chapter-view">
     <div className="chapter-header hud-panel">
@@ -237,7 +274,11 @@ function GenerationMonitor({
 }
 
 function SettingsOverlay({ settings, onSave, onClose, onError }: { settings: AppSettings; onSave: (settings: AppSettings) => Promise<void>; onClose: () => void; onError: (message: string) => void }) {
-  const [draft, setDraft] = useState(settings); const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useState(settings);
+  const [busy, setBusy] = useState(false);
+  const [researchTesting, setResearchTesting] = useState(false);
+  const [researchTestResult, setResearchTestResult] = useState<string | null>(null);
+
   const save = async () => {
     setBusy(true);
     try {
@@ -248,6 +289,18 @@ function SettingsOverlay({ settings, onSave, onClose, onError }: { settings: App
       onClose();
     } finally {
       setBusy(false);
+    }
+  };
+
+  const testPrivateResearch = async () => {
+    setResearchTesting(true);
+    setResearchTestResult(null);
+    try {
+      setResearchTestResult(await api.testPrivateWebResearch());
+    } catch (error) {
+      setResearchTestResult(String(error));
+    } finally {
+      setResearchTesting(false);
     }
   };
   return <div className="overlay" onMouseDown={onClose}><section className="settings-panel hud-panel" onMouseDown={e => e.stopPropagation()}>
@@ -265,6 +318,20 @@ function SettingsOverlay({ settings, onSave, onClose, onError }: { settings: App
       <label>Scene Director<small className="settings-hint">Splits a chapter into imageable visual beats.</small><textarea className="system-prompt-input" value={draft.scene_director_system_prompt} onChange={e => setDraft({ ...draft, scene_director_system_prompt: e.target.value })}/></label>
       <label>LoRA Selector<small className="settings-hint">Chooses character and concept/pose LoRAs from Registry metadata.</small><textarea className="system-prompt-input" value={draft.lora_selector_system_prompt} onChange={e => setDraft({ ...draft, lora_selector_system_prompt: e.target.value })}/></label>
       <label>Image Prompt Generator<small className="settings-hint">Builds the final positive and negative diffusion prompts from scene facts and LoRA activation prompts.</small><textarea className="system-prompt-input" value={draft.image_prompt_generator_system_prompt} onChange={e => setDraft({ ...draft, image_prompt_generator_system_prompt: e.target.value })}/></label>
+      <div className="section-head setting-gap">PRIVATE WEB RESEARCH</div>
+      <small className="settings-hint">Research is fail-closed for privacy: Raphael accepts only a local SearXNG gateway and, by default, requires a local SOCKS5/Tor proxy. Search providers and fetched source sites are contacted through the Tor path; no public SearXNG service is used.</small>
+      <label className="toggle-setting"><input type="checkbox" checked={draft.web_research_enabled} onChange={e => setDraft({ ...draft, web_research_enabled: e.target.checked })}/> Enable web research before story generation</label>
+      <label>Local SearXNG URL<input value={draft.web_search_url} onChange={e => setDraft({ ...draft, web_search_url: e.target.value })} placeholder="http://127.0.0.1:8080"/></label>
+      <label>Local SOCKS/Tor proxy<input value={draft.web_proxy_url} onChange={e => setDraft({ ...draft, web_proxy_url: e.target.value })} placeholder="socks5h://127.0.0.1:9050"/></label>
+      <label className="toggle-setting"><input type="checkbox" checked={draft.web_require_proxy} onChange={e => setDraft({ ...draft, web_require_proxy: e.target.checked })}/> Refuse direct Internet connections for research</label>
+      <div className="settings-grid-two">
+        <label>Max search results<input type="number" min="1" max="12" value={draft.web_search_max_results} onChange={e => setDraft({ ...draft, web_search_max_results: Number(e.target.value) || 1 })}/></label>
+        <label>Max page text<input type="number" min="2000" max="12000" step="500" value={draft.web_fetch_max_chars} onChange={e => setDraft({ ...draft, web_fetch_max_chars: Number(e.target.value) || 2000 })}/></label>
+      </div>
+      <label>Research context limit<input type="number" min="8000" max="48000" step="1000" value={draft.web_context_max_chars} onChange={e => setDraft({ ...draft, web_context_max_chars: Number(e.target.value) || 8000 })}/></label>
+      <label>Research Extractor<small className="settings-hint">The extractor receives fetched page text and must cite every extracted fact by source ID.</small><textarea className="system-prompt-input" value={draft.web_research_system_prompt} onChange={e => setDraft({ ...draft, web_research_system_prompt: e.target.value })}/></label>
+      <div className="research-test-row"><button type="button" className="secondary-btn" onClick={() => void testPrivateResearch()} disabled={researchTesting}>{researchTesting ? 'CHECKING…' : 'TEST PRIVATE GATEWAY'}</button>{researchTestResult ? <span className="tiny">{researchTestResult}</span> : null}</div>
+
       <div className="section-head setting-gap">COMFYUI</div>
       <label>API URL<input value={draft.comfyui_url} onChange={e => setDraft({ ...draft, comfyui_url: e.target.value })} placeholder="http://127.0.0.1:8188"/></label>
       <label>API workflow template<small className="settings-hint">Use POSITIVE_PROMPT, NEGATIVE_PROMPT, SEED, STORY_ID, SCENE_ID and CHECKPOINT placeholders. The workflow must contain a CheckpointLoaderSimple or CheckpointLoader node. Raphael's workflow-builder tool inserts one LoraLoader node per selected LoRA and chains MODEL + CLIP through the full stack automatically.</small><textarea className="workflow-input" value={draft.comfyui_workflow_json} onChange={e => setDraft({ ...draft, comfyui_workflow_json: e.target.value })} placeholder='Paste a ComfyUI API workflow JSON template here...'/></label>
