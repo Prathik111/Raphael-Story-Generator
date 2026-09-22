@@ -10,6 +10,8 @@ use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
 const PROJECT_NAME: &str = "raphael-private-search";
+const DEFAULT_SEARCH_URL: &str = "http://127.0.0.1:8080";
+const DEFAULT_PROXY_URL: &str = "socks5h://127.0.0.1:9050";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 const SECRET_FILE: &str = ".searxng-secret";
@@ -143,38 +145,19 @@ async fn docker_compose_up(dir: &Path) -> AppResult<()> {
     status
 }
 
-pub async fn ensure_started(app: &AppHandle) -> AppResult<()> {
-    let settings = crate::AppSettings::default();
-
-    if research::check_private_search(&settings).await.is_ok() {
-        return Ok(());
-    }
-
-    let runtime = install_runtime_files(app)?;
-    docker_compose_up(&runtime).await?;
-
-    timeout(STARTUP_TIMEOUT, async {
-        loop {
-            let settings = crate::AppSettings::default();
-            if research::check_private_search(&settings).await.is_ok() {
-                return Ok(());
-            }
-            sleep(POLL_INTERVAL).await;
-        }
-    })
-    .await
-    .map_err(|_| {
-        AppError::WebResearch(format!(
-            "private web research gateway did not become ready within {} seconds",
-            STARTUP_TIMEOUT.as_secs()
-        ))
-    })?
-}
-
 pub async fn ensure_started_with_settings(app: &AppHandle, settings: &crate::AppSettings) -> AppResult<()> {
     if research::check_private_search(settings).await.is_ok() {
         return Ok(());
     }
+
+    if settings.web_search_url.trim() != DEFAULT_SEARCH_URL
+        || settings.web_proxy_url.trim() != DEFAULT_PROXY_URL
+    {
+        return Err(AppError::WebResearch(
+            "automatic gateway startup only supports Raphael's bundled local SearXNG/Tor endpoints; the configured custom endpoints are not running".into(),
+        ));
+    }
+
 
     let runtime = install_runtime_files(app)?;
     docker_compose_up(&runtime).await?;
