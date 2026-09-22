@@ -2,7 +2,6 @@ use crate::{chat, AppError, AppResult, AppSettings};
 use futures_util::StreamExt;
 use reqwest::{Client, Proxy, StatusCode};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::time::Duration;
@@ -12,7 +11,7 @@ const MAX_REDIRECTS: usize = 3;
 const DEFAULT_FETCH_CHARS: usize = 12_000;
 const MAX_SOURCE_BYTES: u64 = 2_000_000;
 
-const DEFAULT_WEB_RESEARCH_SYSTEM_PROMPT: &str = r#"You are Raphael Web Research Extractor.
+pub const DEFAULT_WEB_RESEARCH_SYSTEM_PROMPT: &str = r#"You are Raphael Web Research Extractor.
 You receive text fetched from real web pages discovered through a private research gateway.
 Extract only information that is directly supported by the supplied source text.
 
@@ -141,6 +140,16 @@ fn ensure_local_proxy(raw: &str) -> AppResult<Url> {
     Ok(url)
 }
 
+fn build_local_client(timeout: Duration) -> AppResult<Client> {
+    Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent("Raphael-Story-Generator/0.1")
+        .build()
+        .map_err(|error| AppError::WebResearch(format!("failed to create local research client: {error}")))
+}
+
 fn build_client(settings: &AppSettings, timeout: Duration) -> AppResult<Client> {
     if settings.web_require_proxy && settings.web_proxy_url.trim().is_empty() {
         return Err(AppError::WebResearch(
@@ -243,7 +252,7 @@ async fn search(settings: &AppSettings, query: &str) -> AppResult<Vec<SearxResul
         .join("search")
         .map_err(|error| AppError::WebResearch(format!("invalid SearXNG search URL: {error}")))?;
 
-    let client = build_client(settings, Duration::from_secs(20))?;
+    let client = build_local_client(Duration::from_secs(20))?;
     let response = client
         .get(url)
         .query(&[
@@ -340,10 +349,21 @@ async fn fetch_source(
             )));
         }
 
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|error| AppError::WebResearch(format!("failed to read {current}: {error}")))?;
+        let mut stream = response.bytes_stream();
+        let mut bytes = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|error| {
+                AppError::WebResearch(format!("failed to read {current}: {error}"))
+            })?;
+            bytes.extend_from_slice(&chunk);
+            if bytes.len() as u64 > MAX_SOURCE_BYTES {
+                return Err(AppError::WebResearch(format!(
+                    "research source exceeded the {} MB safety limit while downloading: {}",
+                    MAX_SOURCE_BYTES / 1_000_000,
+                    current
+                )));
+            }
+        }
 
         let body = String::from_utf8_lossy(&bytes);
         let content = if content_type.contains("text/html")
@@ -610,7 +630,7 @@ pub async fn check_private_search(settings: &AppSettings) -> AppResult<()> {
     let _ = ensure_local_endpoint(settings.web_search_url.trim(), "web search")?;
     let _ = ensure_local_proxy(settings.web_proxy_url.trim())?;
 
-    let client = build_client(settings, Duration::from_secs(5))?;
+    let client = build_local_client(Duration::from_secs(5))?;
     let response = client
         .get(
             Url::parse(settings.web_search_url.trim())
