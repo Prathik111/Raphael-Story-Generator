@@ -465,31 +465,31 @@ fn evidence_tokens(value: &str) -> Vec<String> {
 }
 
 fn evidence_supported(evidence: &str, source: &ResearchSource) -> bool {
-    let evidence_tokens = evidence_tokens(evidence);
-    if evidence_tokens.len() < 6 {
+    let evidence_token_list = evidence_tokens(evidence);
+    if evidence_token_list.len() < 6 {
         return false;
     }
 
     let content_tokens = evidence_tokens(&source.content);
-    if content_tokens.len() < evidence_tokens.len() {
+    if content_tokens.len() < evidence_token_list.len() {
         return false;
     }
 
     if content_tokens
-        .windows(evidence_tokens.len())
-        .any(|window| window == evidence_tokens.as_slice())
+        .windows(evidence_token_list.len())
+        .any(|window| window == evidence_token_list.as_slice())
     {
         return true;
     }
 
-    let minimum_overlap = evidence_tokens.len().saturating_mul(75).div_ceil(100);
+    let minimum_overlap = evidence_token_list.len().saturating_mul(75).div_ceil(100);
     let window_radius = 4usize;
-    let min_window = evidence_tokens.len().saturating_sub(window_radius).max(6);
-    let max_window = (evidence_tokens.len() + window_radius).min(content_tokens.len());
+    let min_window = evidence_token_list.len().saturating_sub(window_radius).max(6);
+    let max_window = (evidence_token_list.len() + window_radius).min(content_tokens.len());
 
     for size in min_window..=max_window {
         for window in content_tokens.windows(size) {
-            let overlap = evidence_tokens
+            let overlap = evidence_token_list
                 .iter()
                 .filter(|token| window.iter().any(|value| value == *token))
                 .count();
