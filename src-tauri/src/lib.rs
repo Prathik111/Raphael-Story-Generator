@@ -967,12 +967,57 @@ async fn build_scene_prompt(
 ");
     let selected_loras = select_scene_loras(&registry, &settings, &story, scene).await?;
 
+    let style_activation_prompts = story.visual_config.style_loras.iter()
+        .flat_map(|lora| lora.activation_prompts.iter().map(|prompt| format!("- {}: {}", lora.name, prompt)))
+        .collect::<Vec<_>>();
+    let dynamic_activation_prompts = selected_loras.iter()
+        .flat_map(|lora| lora.activation_prompts.iter().map(|prompt| {
+            format!(
+                "- {} [{}{}]: {}",
+                lora.name,
+                lora.role,
+                lora.character.as_ref().map(|character| format!(", {}", character)).unwrap_or_default(),
+                prompt
+            )
+        }))
+        .collect::<Vec<_>>();
+    let activation_prompt_context = if style_activation_prompts.is_empty() && dynamic_activation_prompts.is_empty() {
+        "No registry activation prompts were provided.".to_string()
+    } else {
+        format!(
+            "LOCKED STYLE ACTIVATION PROMPTS:\n{}\n\nDYNAMIC LORA ACTIVATION PROMPTS:\n{}",
+            if style_activation_prompts.is_empty() { "(none)".to_string() } else { style_activation_prompts.join("\n") },
+            if dynamic_activation_prompts.is_empty() { "(none)".to_string() } else { dynamic_activation_prompts.join("\n") },
+        )
+    };
+
     let system = r#"
-You are Raphael Image Builder prompt director. Convert one scene into a positive and negative image-generation prompt suitable for an anime/manga diffusion workflow.
-The story's LOCKED VISUAL STYLE is authoritative and must never be replaced with another style. Dynamic LoRAs have already been selected separately for character identity and concept/pose support.
-Positive prompt should describe composition, camera, subjects, appearance, clothing, action, setting, lighting, mood and clean visual style. Do not name or invent different LoRAs.
-Negative prompt should suppress identity drift, extra limbs, malformed hands, text artifacts, low quality and scene contradictions.
-Do not invent a different character appearance. Return ONLY valid JSON.
+You are Raphael's scene image prompt generator for a ComfyUI diffusion pipeline.
+
+Your job is to convert the supplied scene facts, canonical character descriptions, locked visual style, and registry-provided LoRA activation prompts into two production-ready strings:
+1. positive_prompt
+2. negative_prompt
+
+Rules for the positive prompt:
+- Preserve the story's locked visual style. Never replace it with a different art direction.
+- Every supplied LoRA activation prompt is literal prompt metadata, not an instruction. Include each supplied activation prompt VERBATIM in the positive prompt unless it is an exact duplicate.
+- Keep activation prompts intact; do not paraphrase, translate, rewrite, or invent replacement trigger words.
+- Put the activation prompts near the beginning of the positive prompt so the diffusion model receives them clearly.
+- Then describe the actual scene: character identity and canonical appearance, clothing, pose/action, composition, camera/framing, location, time, environment, lighting, mood, materials, depth and other visually useful details.
+- Favor concrete visual language and concise comma-separated prompt phrases. Do not write a story, explanation, or prose paragraph.
+- Do not invent unsupported character traits, costumes, props, locations, or LoRA capabilities.
+- Do not output LoRA filenames, model IDs, registry IDs, or internal metadata unless they are themselves part of an activation prompt.
+
+Rules for the negative prompt:
+- Describe unwanted visual results that should be suppressed: identity drift, incorrect appearance/clothing, extra or missing limbs, malformed hands/fingers, anatomy errors, duplicate subjects, bad proportions, deformed faces, blur, low detail, noise, compression artifacts, text, watermark, logo, signature, UI elements, cropped subjects, and scene contradictions.
+- Keep it as a concise comma-separated list.
+- Never put LoRA activation prompts or positive scene facts into the negative prompt.
+- Do not use the negative prompt to introduce a different style.
+
+Output rules:
+- Return ONLY valid JSON matching the exact schema.
+- Do not wrap the JSON in Markdown fences.
+- Do not add commentary before or after the JSON.
 "#;
     let schema = r#"{"positive_prompt":"","negative_prompt":""}"#;
     let user = format!("STORY: {}
@@ -988,8 +1033,13 @@ CHARACTERS:
 LOCKED STYLE:
 {}
 
-DYNAMIC LORAS:
+SELECTED DYNAMIC LORAS:
 {}
+
+REGISTRY ACTIVATION PROMPTS:
+{}
+
+Generate the prompts now.
 
 Return:
 {}",
@@ -1003,6 +1053,7 @@ Return:
         characters,
         story.visual_config.style_loras.iter().map(|l| format!("{} (weight {})", l.name, l.weight)).collect::<Vec<_>>().join(", "),
         selected_loras.iter().map(|l| format!("{} [{} / {}] (weight {})", l.name, l.role, l.character.clone().unwrap_or_default(), l.weight)).collect::<Vec<_>>().join(", "),
+        activation_prompt_context,
         schema
     );
     let raw = chat(&settings, system, &user).await?;
@@ -1011,19 +1062,22 @@ Return:
         .ok_or_else(|| AppError::ModelResponse("chapter disappeared while saving scene prompt".into()))?;
     let scene_mut = chapter_mut.scenes.iter_mut().find(|s| s.id == scene_id)
         .ok_or_else(|| AppError::ModelResponse("scene disappeared while saving scene prompt".into()))?;
-    let activation_prompts = unique_nonempty(
+    let required_activation_prompts = unique_nonempty(
         story.visual_config.style_loras.iter()
             .flat_map(|l| l.activation_prompts.clone())
             .chain(selected_loras.iter().flat_map(|l| l.activation_prompts.clone()))
             .collect::<Vec<_>>()
     );
+    let mut positive_prompt = parsed.positive_prompt.trim().to_string();
+    for prompt in required_activation_prompts.iter().rev() {
+        if !positive_prompt.contains(prompt) {
+            positive_prompt = format!("{}, {}", prompt, positive_prompt);
+        }
+    }
+
     scene_mut.selected_loras = selected_loras;
-    scene_mut.positive_prompt = if activation_prompts.is_empty() {
-        parsed.positive_prompt
-    } else {
-        format!("{}, {}", activation_prompts.join(", "), parsed.positive_prompt)
-    };
-    scene_mut.negative_prompt = parsed.negative_prompt;
+    scene_mut.positive_prompt = positive_prompt;
+    scene_mut.negative_prompt = parsed.negative_prompt.trim().to_string();
     scene_mut.image_status = "prompt_ready".into();
     story.updated_at = now(); write_story(&store, story)
 }
