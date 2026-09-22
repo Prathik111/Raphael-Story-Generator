@@ -1,4 +1,5 @@
 name: CI
+# Feature branches are validated through their pull-request run.
 
 on:
   push:
