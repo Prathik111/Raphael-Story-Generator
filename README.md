@@ -179,3 +179,6 @@ If the ComfyUI WebSocket is unavailable, Raphael falls back to /history/{prompt_
 ## Research visibility
 
 When private research is enabled, the story view shows the actual search queries, fetched source titles/URLs/snippets, source-backed facts and the raw WEB RESEARCH LLM extractor response in the live trace. This makes it possible to inspect what search returned before the Story Architect uses the extracted facts.
+
+
+SearXNG remains health-checked even when research is disabled, so the service panel reflects the API's actual availability rather than the feature toggle.
