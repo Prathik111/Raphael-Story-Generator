@@ -327,19 +327,43 @@ impl RegistryState {
             .files(model_id)
             .await
             .map_err(|error| AppError::Registry(format!("failed to load files for {}: {error}", model.name)))?;
-        let file = files
-            .into_iter()
-            .filter(|file| matches!(file.status, registry_core::FileStatus::Available))
-            .max_by_key(|file| file.updated_at)
-            .ok_or_else(|| AppError::Registry(format!("model '{}' has no available file", model.name)))?;
 
         let versions = client
             .versions(model_id)
             .await
             .map_err(|error| AppError::Registry(format!("failed to load versions for {}: {error}", model.name)))?;
-        let activation_prompts = versions
+        let latest_version = versions
             .into_iter()
-            .max_by_key(|version| version.updated_at)
+            .max_by_key(|version| version.updated_at);
+
+        let file = if let Some(version) = latest_version.as_ref() {
+            files
+                .iter()
+                .filter(|file| {
+                    matches!(file.status, registry_core::FileStatus::Available)
+                        && file.version_id.as_deref() == Some(version.id.as_str())
+                })
+                .max_by_key(|file| file.updated_at)
+                .cloned()
+                .or_else(|| {
+                    files
+                        .iter()
+                        .filter(|file| {
+                            matches!(file.status, registry_core::FileStatus::Available)
+                                && file.version_id.is_none()
+                        })
+                        .max_by_key(|file| file.updated_at)
+                        .cloned()
+                })
+        } else {
+            files
+                .into_iter()
+                .filter(|file| matches!(file.status, registry_core::FileStatus::Available))
+                .max_by_key(|file| file.updated_at)
+        }
+        .ok_or_else(|| AppError::Registry(format!("model '{}' has no available file matching its latest version", model.name)))?;
+
+        let activation_prompts = latest_version
             .map(|version| version.activation_prompts)
             .unwrap_or_default();
 

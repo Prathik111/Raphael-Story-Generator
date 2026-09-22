@@ -89,6 +89,9 @@ export interface Scene {
   selected_loras: SceneLoraSelection[];
   image_status: 'not_ready' | 'prompt_ready' | 'queued' | 'generated' | 'failed';
   image_url: string | null;
+  image_path: string | null;
+  image_mime: string | null;
+  image_error: string | null;
   comfy_prompt_id: string | null;
 }
 
@@ -165,6 +168,7 @@ export interface AppState {
   stories: StorySummary[];
   settings: AppSettings;
   llm_configured: boolean;
+  llm_api_key_configured: boolean;
 }
 
 export interface SceneExtractionResult {
@@ -221,6 +225,22 @@ export interface LlmGenerationEvent {
 }
 
 export type PipelineTraceStatus = 'started' | 'completed' | 'error';
+
+export interface ComfyGenerationEvent {
+  story_id: string;
+  chapter_number: number;
+  scene_id: string;
+  prompt_id: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  progress: number | null;
+  current_node: string | null;
+  current_step: number | null;
+  total_steps: number | null;
+  queue_remaining: number | null;
+  image_url: string | null;
+  error: string | null;
+  message: string;
+}
 
 export interface PipelineEvent {
   event_id: string;

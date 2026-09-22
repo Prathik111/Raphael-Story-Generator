@@ -77,6 +77,17 @@ The Engine Settings panel exposes a separate editable system prompt for each sta
 
 Web research settings include the local SearXNG URL, local Tor/SOCKS5 proxy, fail-closed proxy requirement, result/source limits, and research extractor prompt. These settings are persisted with the local application settings.
 
+## Prerequisites
+
+For the full local production pipeline, Raphael currently expects:
+
+- Raphael Model Registry running locally. The Story Generator starts it automatically when its executable or development source tree is available.
+- Docker Desktop with Docker Compose for the bundled SearXNG + Tor private research gateway.
+- An OpenAI-compatible LLM endpoint; Ollama on localhost is the default.
+- ComfyUI for image generation. Raphael queues workflows, follows live execution progress, retrieves completed image outputs, and displays the result in the scene.
+
+Web research can be disabled when Docker/Tor is not desired. Image generation can remain disabled until ComfyUI is configured.
+
 ## Development
 
 Install dependencies:
@@ -100,7 +111,9 @@ Scene extraction and image prompt generation are implemented as independent stag
 
 ## ComfyUI workflow queue
 
-The image builder can queue a scene through ComfyUI's `/prompt` API. In Settings, paste a ComfyUI API-format workflow JSON template and use these placeholders inside string values:
+The image builder queues a scene through ComfyUI's `/prompt` API, then monitors the job through ComfyUI WebSocket events with an HTTP history fallback. Live sampling/node progress is shown directly on the scene card. When the workflow completes, Raphael downloads the first generated image output into app data and displays it in the scene.
+
+In Settings, paste a ComfyUI API-format workflow JSON template and use these placeholders inside string values:
 
 - `{{POSITIVE_PROMPT}}`
 - `{{NEGATIVE_PROMPT}}`
@@ -136,3 +149,20 @@ Automatic model/LoRA discovery from the Raphael Model Manager is handled through
 ## Local settings and secrets
 
 The optional LLM API key is stored in the application's local settings file and is not committed to the repository. Do not use a shared Windows account for credentials you need to keep private.
+
+
+## Image generation lifecycle
+
+~~~text
+Queue workflow
+  -> queued
+  -> ComfyUI WebSocket progress events
+  -> current node + sampling step progress
+  -> execution success/error
+  -> /history/{prompt_id}
+  -> /view image download
+  -> persisted app-data image
+  -> scene image preview
+~~~
+
+If the ComfyUI WebSocket is unavailable, Raphael falls back to /history/{prompt_id} and /queue polling so completed generations are still detected. Queued jobs are resumed when the application starts again.

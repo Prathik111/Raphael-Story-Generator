@@ -402,26 +402,72 @@ fn trim_chars(value: &str, max_chars: usize) -> String {
 }
 
 fn source_context(sources: &[ResearchSource], max_chars: usize) -> String {
+    let limit = max_chars.max(4_000);
     let mut output = String::new();
 
     for source in sources {
-        let block = format!(
-            "[{}]\nTITLE: {}\nURL: {}\nSEARCH SNIPPET: {}\nPAGE TEXT:\n{}\n\n",
-            source.id,
-            source.title,
-            source.url,
-            source.snippet,
-            source.content
-        );
-
-        if output.chars().count() + block.chars().count() > max_chars.max(4_000) {
+        if output.chars().count() >= limit {
             break;
         }
 
-        output.push_str(&block);
+        let header = format!(
+            "[{}]\nTITLE: {}\nURL: {}\nSEARCH SNIPPET: {}\nPAGE TEXT:\n",
+            source.id,
+            source.title,
+            source.url,
+            source.snippet
+        );
+        let remaining = limit.saturating_sub(output.chars().count());
+        if remaining <= header.chars().count() + 120 {
+            break;
+        }
+
+        let content_budget = remaining.saturating_sub(header.chars().count() + 2);
+        output.push_str(&header);
+        output.push_str(&trim_chars(&source.content, content_budget));
+        output.push_str("\n\n");
     }
 
     output
+}
+
+fn normalize_evidence(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn evidence_supported(evidence: &str, source: &ResearchSource) -> bool {
+    let normalized_evidence = normalize_evidence(evidence);
+    if normalized_evidence.len() < 32 {
+        return false;
+    }
+
+    let normalized_content = normalize_evidence(&source.content);
+    if normalized_content.contains(&normalized_evidence) {
+        return true;
+    }
+
+    let evidence_tokens = normalized_evidence
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|token| token.len() >= 4)
+        .collect::<std::collections::HashSet<_>>();
+    if evidence_tokens.len() < 6 {
+        return false;
+    }
+
+    let content_tokens = normalized_content
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|token| token.len() >= 4)
+        .collect::<std::collections::HashSet<_>>();
+    let overlap = evidence_tokens
+        .iter()
+        .filter(|token| content_tokens.contains(token))
+        .count();
+
+    overlap * 100 / evidence_tokens.len() >= 80
 }
 
 fn research_prompt(bundle: &ResearchBundle) -> String {
@@ -554,10 +600,22 @@ pub async fn research_web(
         .facts
         .into_iter()
         .filter(|fact| {
+            let confidence = fact.confidence.trim().to_ascii_lowercase();
+            let referenced = fact
+                .source_ids
+                .iter()
+                .filter_map(|id| sources.iter().find(|source| source.id == *id))
+                .collect::<Vec<_>>();
             !fact.claim.trim().is_empty()
                 && !fact.evidence.trim().is_empty()
                 && !fact.source_ids.is_empty()
                 && fact.source_ids.iter().all(|id| valid_ids.contains(id.as_str()))
+                && matches!(confidence.as_str(), "high" | "medium" | "low")
+                && referenced.iter().any(|source| evidence_supported(&fact.evidence, source))
+        })
+        .map(|mut fact| {
+            fact.confidence = fact.confidence.trim().to_ascii_lowercase();
+            fact
         })
         .collect::<Vec<_>>();
 

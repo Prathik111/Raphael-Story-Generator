@@ -86,3 +86,22 @@
 .settings-grid-two{display:grid;grid-template-columns:1fr 1fr;gap:9px}
 .research-test-row{display:flex;align-items:center;gap:10px;margin:6px 0 14px}
 @media(max-width:780px){.settings-grid-two{grid-template-columns:1fr}}
+
+
+/* Chapter navigation and ComfyUI image generation */
+.chapter-selector{display:flex;align-items:center;gap:7px;margin-top:12px;font-size:6px;letter-spacing:.13em;color:rgba(205,232,244,.43)}
+.chapter-selector select{height:28px;min-width:220px;padding:0 8px;border:1px solid rgba(255,255,255,.12);background:rgba(0,0,0,.28);color:#eaf4f8;font-size:7px;outline:none}
+.chapter-selector select:focus{border-color:rgba(168,216,240,.4)}
+.scene-image{display:block;width:100%;max-height:420px;object-fit:contain;margin:10px 0 4px;border:1px solid rgba(255,255,255,.08);background:#020405}
+.scene-progress{margin-top:9px;padding:8px;border:1px solid rgba(168,216,240,.12);background:rgba(168,216,240,.025)}
+.scene-progress-head{display:flex;justify-content:space-between;gap:10px;font-size:7px;line-height:1.35;color:rgba(225,239,246,.58)}
+.scene-progress-head b{font-weight:500;color:rgba(168,216,240,.8)}
+.scene-progress-track{height:4px;margin-top:6px;overflow:hidden;background:rgba(255,255,255,.06)}
+.scene-progress-fill{height:100%;background:rgba(168,216,240,.72);transition:width .2s ease}
+.scene-progress-fill.indeterminate{width:35%;animation:scene-progress-slide 1.1s infinite ease-in-out}
+.scene-progress small{display:block;margin-top:5px;font-size:5px;letter-spacing:.09em;color:rgba(255,255,255,.27)}
+.scene-error{margin-top:8px;padding:7px;border-left:1px solid rgba(218,130,130,.42);background:rgba(110,30,30,.1);font-size:6px;line-height:1.45;color:rgba(248,204,204,.68)}
+.scene-status.running{color:#a8ccdf}.scene-status.failed{color:#d79d9d}
+.settings-clear-key{display:block;margin-top:6px;color:rgba(248,204,204,.62)}
+@keyframes scene-progress-slide{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
+@media(max-width:780px){.chapter-selector{align-items:flex-start;flex-direction:column}.chapter-selector select{width:100%;min-width:0}}

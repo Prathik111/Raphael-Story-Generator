@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { AppSettings, AppState, LlmGenerationEvent, PipelineEvent, RegistryCatalog, RegistryStatusDto, SceneExtractionResult, Story, StoryVisualSetup } from './types';
+import type { AppSettings, AppState, ComfyGenerationEvent, LlmGenerationEvent, PipelineEvent, RegistryCatalog, RegistryStatusDto, SceneExtractionResult, Story, StoryVisualSetup } from './types';
 
 export const isWebApp = typeof window !== 'undefined' && !(window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 
@@ -18,6 +18,9 @@ export const subscribeToLlm = (handler: (event: LlmGenerationEvent) => void): Pr
 
 export const subscribeToPipeline = (handler: (event: PipelineEvent) => void): Promise<UnlistenFn> =>
   isWebApp ? Promise.resolve(() => {}) : listen<PipelineEvent>('raphael:pipeline', event => handler(event.payload));
+
+export const subscribeToComfy = (handler: (event: ComfyGenerationEvent) => void): Promise<UnlistenFn> =>
+  isWebApp ? Promise.resolve(() => {}) : listen<ComfyGenerationEvent>('raphael:comfyui', event => handler(event.payload));
 
 export const api = {
   isWebApp,
@@ -38,4 +41,7 @@ export const api = {
   getRegistryStatus: () => command<RegistryStatusDto>('get_registry_status'),
   getRegistryModels: () => command<RegistryCatalog>('get_registry_models'),
   testPrivateWebResearch: () => command<string>('test_private_web_research'),
+  getSceneImage: (storyId: string, chapterNumber: number, sceneId: string) =>
+    command<string | null>('get_scene_image', { storyId, chapterNumber, sceneId }),
+  clearLlmApiKey: () => command<string>('clear_llm_api_key'),
 };

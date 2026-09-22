@@ -1,8 +1,10 @@
+mod comfyui;
 mod privacy_gateway;
 mod registry;
 mod research;
 mod workflow_builder;
 
+use base64::Engine;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use research::ResearchBundle;
 use serde::{Deserialize, Serialize};
@@ -253,6 +255,12 @@ pub struct Scene {
     pub selected_loras: Vec<SceneLoraSelection>,
     pub image_status: String,
     pub image_url: Option<String>,
+    #[serde(default)]
+    pub image_path: Option<String>,
+    #[serde(default)]
+    pub image_mime: Option<String>,
+    #[serde(default)]
+    pub image_error: Option<String>,
     pub comfy_prompt_id: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -302,6 +310,7 @@ pub struct AppStateDto {
     pub stories: Vec<StorySummary>,
     pub settings: AppSettings,
     pub llm_configured: bool,
+    pub llm_api_key_configured: bool,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -449,12 +458,61 @@ impl Store {
     }
 }
 fn load_json<T: for<'de> Deserialize<'de>>(path: &PathBuf) -> AppResult<T> {
-    let text = fs::read_to_string(path).map_err(|e| AppError::Storage(e.to_string()))?;
-    serde_json::from_str(&text).map_err(|e| AppError::Storage(e.to_string()))
+    fn try_read<T: for<'de> Deserialize<'de>>(path: &PathBuf) -> Result<T, String> {
+        let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&text).map_err(|e| e.to_string())
+    }
+
+    match try_read(path) {
+        Ok(value) => Ok(value),
+        Err(primary_error) => {
+            let backup = PathBuf::from(format!("{}.bak", path.display()));
+            if let Ok(value) = try_read(&backup) {
+                let _ = fs::copy(&backup, path);
+                return Ok(value);
+            }
+
+            let tmp = PathBuf::from(format!("{}.tmp", path.display()));
+            if let Ok(value) = try_read(&tmp) {
+                let _ = fs::copy(&tmp, path);
+                return Ok(value);
+            }
+
+            Err(AppError::Storage(primary_error))
+        }
+    }
 }
+
 fn save_json<T: Serialize>(path: &PathBuf, value: &T) -> AppResult<()> {
+    use std::io::Write;
+
     let text = serde_json::to_string_pretty(value).map_err(|e| AppError::Storage(e.to_string()))?;
-    fs::write(path, text).map_err(|e| AppError::Storage(e.to_string()))
+    let tmp = PathBuf::from(format!("{}.tmp", path.display()));
+    let backup = PathBuf::from(format!("{}.bak", path.display()));
+
+    let mut file = fs::File::create(&tmp).map_err(|e| AppError::Storage(e.to_string()))?;
+    file.write_all(text.as_bytes()).map_err(|e| AppError::Storage(e.to_string()))?;
+    file.sync_all().map_err(|e| AppError::Storage(e.to_string()))?;
+    drop(file);
+
+    if path.exists() {
+        let _ = fs::remove_file(&backup);
+        fs::rename(path, &backup).map_err(|e| AppError::Storage(e.to_string()))?;
+    }
+
+    match fs::rename(&tmp, path) {
+        Ok(()) => {
+            let _ = fs::remove_file(&backup);
+            Ok(())
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&tmp);
+            if !path.exists() && backup.exists() {
+                let _ = fs::rename(&backup, path);
+            }
+            Err(AppError::Storage(error.to_string()))
+        }
+    }
 }
 fn now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -562,6 +620,7 @@ async fn chat(
         Ok(response) => response,
         Err(error) => {
             let message = error.to_string();
+            emit_pipeline(app, stage, "error", message.clone());
             emit_llm(app, LlmGenerationEvent {
                 generation_id: generation_id.clone(), stage: stage.into(), status: "error".into(),
                 model: settings.llm_model.trim().into(), system_prompt: None, user_prompt: None,
@@ -918,23 +977,52 @@ fn build_summaries(data: &StoreData) -> Vec<StorySummary> {
     result
 }
 #[tauri::command]
+fn redacted_settings(settings: &AppSettings) -> AppSettings {
+    let mut redacted = settings.clone();
+    redacted.llm_api_key.clear();
+    redacted
+}
+
+#[tauri::command]
 fn get_app_state(store: State<'_, Store>) -> AppResult<AppStateDto> {
     let data = store.data.read().map_err(|e| AppError::Storage(e.to_string()))?;
     let settings = store.settings.read().map_err(|e| AppError::Storage(e.to_string()))?.clone();
-    Ok(AppStateDto { stories: build_summaries(&data), llm_configured: !settings.llm_base_url.is_empty() && !settings.llm_model.is_empty(), settings })
+    Ok(AppStateDto {
+        stories: build_summaries(&data),
+        llm_configured: !settings.llm_base_url.is_empty() && !settings.llm_model.is_empty(),
+        llm_api_key_configured: !settings.llm_api_key.is_empty(),
+        settings: redacted_settings(&settings),
+    })
 }
 #[tauri::command]
 fn get_story(id: String, store: State<'_, Store>) -> AppResult<Story> { require_story(&store, &id) }
 #[tauri::command]
 fn get_settings(store: State<'_, Store>) -> AppResult<AppSettings> {
-    Ok(store.settings.read().map_err(|e| AppError::Storage(e.to_string()))?.clone())
+    let settings = store.settings.read().map_err(|e| AppError::Storage(e.to_string()))?.clone();
+    Ok(redacted_settings(&settings))
 }
 #[tauri::command]
-fn save_settings(settings: AppSettings, store: State<'_, Store>) -> AppResult<AppSettings> {
+fn save_settings(mut settings: AppSettings, store: State<'_, Store>) -> AppResult<AppSettings> {
+    {
+        let current = store.settings.read().map_err(|e| AppError::Storage(e.to_string()))?;
+        if settings.llm_api_key.trim().is_empty() {
+            settings.llm_api_key = current.llm_api_key.clone();
+        }
+    }
     validate_settings(&settings)?;
     *store.settings.write().map_err(|e| AppError::Storage(e.to_string()))? = settings.clone();
     store.persist_settings()?;
-    Ok(settings)
+    Ok(redacted_settings(&settings))
+}
+
+#[tauri::command]
+fn clear_llm_api_key(store: State<'_, Store>) -> AppResult<String> {
+    {
+        let mut settings = store.settings.write().map_err(|e| AppError::Storage(e.to_string()))?;
+        settings.llm_api_key.clear();
+    }
+    store.persist_settings()?;
+    Ok("Stored LLM API key cleared.".into())
 }
 #[tauri::command]
 async fn create_story(
@@ -1269,7 +1357,7 @@ Return:
         id: format!("{}-scene-{:03}", chapter.number, index + 1), order: index + 1, description: scene.description,
         location: scene.location, time: scene.time, characters: scene.characters, action: scene.action,
         composition: scene.composition, dialogue: scene.dialogue, positive_prompt: String::new(),
-        negative_prompt: String::new(), selected_loras: Vec::new(), image_status: "not_ready".into(), image_url: None, comfy_prompt_id: None,
+        negative_prompt: String::new(), selected_loras: Vec::new(), image_status: "not_ready".into(), image_url: None, image_path: None, image_mime: None, image_error: None, comfy_prompt_id: None,
     }).collect::<Vec<_>>();
     story.chapters[chapter_index].scenes = scenes.clone(); story.updated_at = now(); write_story(&store, story)?;
     Ok(SceneExtractionResult { chapter_number, scenes })
@@ -1640,9 +1728,12 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
         .build()
         .map_err(|e| AppError::ComfyUi(format!("failed to create HTTP client: {e}")))?;
     emit_pipeline(store.app(), "comfyui", "started", "Submitting completed workflow to ComfyUI /prompt");
+    let client_id = format!("raphael-story-{}-{}", story.id, Uuid::new_v4());
+    let requested_prompt_id = Uuid::new_v4().to_string();
     let response = client.post(url).json(&json!({
         "prompt": workflow,
-        "client_id": format!("raphael-story-{}", story.id),
+        "client_id": client_id,
+        "prompt_id": requested_prompt_id,
     })).send().await.map_err(|e| AppError::ComfyUi(e.to_string()))?;
     let status = response.status();
     let body = response.text().await.map_err(|e| AppError::ComfyUi(e.to_string()))?;
@@ -1652,16 +1743,67 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
             value.get("error").and_then(Value::as_str).unwrap_or("ComfyUI rejected the workflow").to_string()
         ));
     }
-    let prompt_id = value.get("prompt_id").and_then(Value::as_str).ok_or_else(|| AppError::ComfyUi("ComfyUI did not return a prompt_id".into()))?.to_string();
+    let prompt_id = value.get("prompt_id").and_then(Value::as_str).unwrap_or(&requested_prompt_id).to_string();
     let chapter_mut = story.chapters.iter_mut().find(|c| c.number == chapter_number)
         .ok_or_else(|| AppError::ComfyUi("chapter disappeared while updating image status".into()))?;
     let scene_mut = chapter_mut.scenes.iter_mut().find(|s| s.id == scene_id)
         .ok_or_else(|| AppError::ComfyUi("scene disappeared while updating image status".into()))?;
     emit_pipeline(store.app(), "comfyui", "completed", "ComfyUI accepted the workflow");
-    scene_mut.comfy_prompt_id = Some(prompt_id);
+    scene_mut.comfy_prompt_id = Some(prompt_id.clone());
     scene_mut.image_status = "queued".into();
+    scene_mut.image_error = None;
+    scene_mut.image_path = None;
+    scene_mut.image_mime = None;
     story.updated_at = now();
-    write_story(&store, story)
+    let queued = write_story(&store, story)?;
+    emit_pipeline(store.app(), "comfyui", "completed", "ComfyUI accepted the workflow");
+    comfyui::spawn_generation_monitor(
+        store.app().clone(),
+        settings.comfyui_url.clone(),
+        queued.id.clone(),
+        chapter_number,
+        scene_id.clone(),
+        client_id,
+        prompt_id,
+    );
+    Ok(queued)
+}
+
+#[tauri::command]
+fn get_scene_image(
+    story_id: String,
+    chapter_number: usize,
+    scene_id: String,
+    store: State<'_, Store>,
+) -> AppResult<Option<String>> {
+    let story = require_story(&store, &story_id)?;
+    let scene = story
+        .chapters
+        .iter()
+        .find(|chapter| chapter.number == chapter_number)
+        .and_then(|chapter| chapter.scenes.iter().find(|scene| scene.id == scene_id))
+        .ok_or_else(|| AppError::ComfyUi("scene not found".into()))?;
+
+    let Some(relative_path) = scene.image_path.as_deref() else {
+        return Ok(None);
+    };
+
+    let generated_root = store.root.join("generated");
+    let image_path = store.root.join(relative_path);
+    let canonical_root = generated_root
+        .canonicalize()
+        .map_err(|e| AppError::ComfyUi(format!("generated image directory unavailable: {e}")))?;
+    let canonical_image = image_path
+        .canonicalize()
+        .map_err(|e| AppError::ComfyUi(format!("generated image unavailable: {e}")))?;
+    if !canonical_image.starts_with(&canonical_root) {
+        return Err(AppError::ComfyUi("generated image path escaped the application data directory".into()));
+    }
+
+    let bytes = fs::read(&canonical_image).map_err(|e| AppError::ComfyUi(e.to_string()))?;
+    let mime = scene.image_mime.as_deref().unwrap_or("image/png");
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(Some(format!("data:{mime};base64,{encoded}")))
 }
 
 #[tauri::command]
@@ -1697,9 +1839,11 @@ pub fn run() {
                 });
             }
 
+            comfyui::resume_queued_generations(app.handle(), &web_settings.comfyui_url);
+
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_app_state, get_story, get_settings, save_settings, create_story, generate_next_chapter, extract_scenes, build_scene_prompt, queue_scene_image, build_comfyui_workflow, test_private_web_research, registry::ensure_registry, registry::get_registry_status, registry::get_registry_models])
+        .invoke_handler(tauri::generate_handler![get_app_state, get_story, get_settings, save_settings, clear_llm_api_key, create_story, generate_next_chapter, extract_scenes, build_scene_prompt, queue_scene_image, get_scene_image, build_comfyui_workflow, test_private_web_research, registry::ensure_registry, registry::get_registry_status, registry::get_registry_models])
         .run(tauri::generate_context!())
         .expect("error while running Raphael Story Generator");
 }

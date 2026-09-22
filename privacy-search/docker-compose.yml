@@ -2,14 +2,12 @@ services:
   tor:
     build:
       context: ./tor
-    container_name: raphael-private-tor
     restart: unless-stopped
     ports:
       - "127.0.0.1:9050:9050"
 
   searxng:
     image: docker.io/searxng/searxng:latest
-    container_name: raphael-private-searxng
     restart: unless-stopped
     depends_on:
       - tor
