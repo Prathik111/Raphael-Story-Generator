@@ -99,7 +99,6 @@ Output rules:
 fn default_web_research_enabled() -> bool { true }
 fn default_web_search_url() -> String { "http://127.0.0.1:8080".into() }
 fn default_web_proxy_url() -> String { "socks5h://127.0.0.1:9050".into() }
-fn default_web_require_proxy() -> bool { true }
 fn default_web_search_max_results() -> usize { 8 }
 fn default_web_fetch_max_chars() -> usize { 12_000 }
 fn default_web_context_max_chars() -> usize { 36_000 }
@@ -125,8 +124,6 @@ pub struct AppSettings {
     pub web_search_url: String,
     #[serde(default = "default_web_proxy_url")]
     pub web_proxy_url: String,
-    #[serde(default = "default_web_require_proxy")]
-    pub web_require_proxy: bool,
     #[serde(default = "default_web_search_max_results")]
     pub web_search_max_results: usize,
     #[serde(default = "default_web_fetch_max_chars")]
@@ -153,7 +150,6 @@ impl Default for AppSettings {
             web_research_enabled: true,
             web_search_url: default_web_search_url(),
             web_proxy_url: default_web_proxy_url(),
-            web_require_proxy: true,
             web_search_max_results: default_web_search_max_results(),
             web_fetch_max_chars: default_web_fetch_max_chars(),
             web_context_max_chars: default_web_context_max_chars(),
@@ -828,7 +824,7 @@ fn validate_settings(settings: &AppSettings) -> AppResult<()> {
         if settings.web_search_url.trim().is_empty() {
             return Err(AppError::WebResearch("private web research requires a local SearXNG URL".into()));
         }
-        if settings.web_require_proxy && settings.web_proxy_url.trim().is_empty() {
+        if settings.web_proxy_url.trim().is_empty() {
             return Err(AppError::WebResearch("private web research requires a local SOCKS/Tor proxy".into()));
         }
         if settings.web_research_system_prompt.trim().is_empty() {
