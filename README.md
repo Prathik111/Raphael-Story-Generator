@@ -176,6 +176,8 @@ Queue workflow
 If the ComfyUI WebSocket is unavailable, Raphael falls back to /history/{prompt_id} and /queue polling so completed generations are still detected. Queued jobs are resumed when the application starts again.
 
 
+The latest CI pass validates both frontend and Windows Rust packaging after each PR synchronization.
+
 ## Research visibility
 
 When private research is enabled, the story view shows the actual search queries, fetched source titles/URLs/snippets, source-backed facts and the raw WEB RESEARCH LLM extractor response in the live trace. This makes it possible to inspect what search returned before the Story Architect uses the extracted facts.
