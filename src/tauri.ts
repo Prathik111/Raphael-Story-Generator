@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { AppSettings, AppState, ComfyGenerationEvent, LlmGenerationEvent, PipelineEvent, RegistryCatalog, RegistryStatusDto, SceneExtractionResult, Story, StoryVisualSetup } from './types';
+import type { AppSettings, AppState, ComfyGenerationEvent, LlmGenerationEvent, PipelineEvent, RegistryCatalog, RegistryStatusDto, SceneExtractionResult, ServiceStatusBoard, Story, StoryVisualSetup } from './types';
 
 export const isWebApp = typeof window !== 'undefined' && !(window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 
@@ -40,6 +40,7 @@ export const api = {
   ensureRegistry: () => command<RegistryStatusDto>('ensure_registry'),
   getRegistryStatus: () => command<RegistryStatusDto>('get_registry_status'),
   getRegistryModels: () => command<RegistryCatalog>('get_registry_models'),
+  getServiceStatus: () => command<ServiceStatusBoard>('get_service_status'),
   testPrivateWebResearch: () => command<string>('test_private_web_research'),
   getSceneImage: (storyId: string, chapterNumber: number, sceneId: string) =>
     command<string | null>('get_scene_image', { storyId, chapterNumber, sceneId }),
