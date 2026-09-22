@@ -1939,13 +1939,16 @@ async fn get_service_status(
 
     let board = service_status::probe(&registry, &settings).await;
 
-    if matches!(board.comfyui.status, service_status::ServiceHealthStatus::Online)
-        && board.comfyui.url != settings.comfyui_url
-    {
-        if let Ok(mut current) = store.settings.write() {
-            current.comfyui_url = board.comfyui.url.clone();
-            let _ = store.persist_settings();
+    let detected_comfy_url = matches!(board.comfyui.status, service_status::ServiceHealthStatus::Online)
+        .then(|| board.comfyui.url.clone())
+        .filter(|url| url != &settings.comfyui_url);
+
+    if let Some(url) = detected_comfy_url {
+        {
+            let mut current = store.settings.write().map_err(|e| AppError::Storage(e.to_string()))?;
+            current.comfyui_url = url;
         }
+        store.persist_settings()?;
     }
 
     Ok(board)
