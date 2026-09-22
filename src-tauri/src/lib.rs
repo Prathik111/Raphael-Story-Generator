@@ -675,7 +675,6 @@ async fn create_story(
     validate_visual_setup(&visual_config, &checkpoint_artifact, &style_artifacts)?;
 
     if settings.llm_model.trim().is_empty() { return Err(AppError::Llm("configure an LLM model in settings".into())); }
-    if settings.llm_model.trim().is_empty() { return Err(AppError::Llm("configure an LLM model in settings".into())); }
     let system = r#"
 You are Raphael Story Architect. Convert a user's natural-language story request into a structured story bible and opening chapter.
 Return ONLY valid JSON matching the requested schema. Do not wrap it in markdown.
@@ -1187,19 +1186,19 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
         ("{{SCENE_ID}}", Value::String(scene.id.clone())),
         ("{{CHECKPOINT}}", Value::String(story.visual_config.checkpoint_file_name.clone())),
         ("{{STYLE_LORA_1}}", Value::String(story.visual_config.style_loras.get(0).map(|l| l.file_name.clone()).unwrap_or_default())),
-        ("{{STYLE_LORA_1_WEIGHT}}", Value::String(story.visual_config.style_loras.get(0).map(|l| l.weight.to_string()).unwrap_or_else(|| "0".into()))),
+        ("{{STYLE_LORA_1_WEIGHT}}", json!(story.visual_config.style_loras.get(0).map(|l| l.weight).unwrap_or(0.0))),
         ("{{STYLE_LORA_2}}", Value::String(story.visual_config.style_loras.get(1).map(|l| l.file_name.clone()).unwrap_or_default())),
-        ("{{STYLE_LORA_2_WEIGHT}}", Value::String(story.visual_config.style_loras.get(1).map(|l| l.weight.to_string()).unwrap_or_else(|| "0".into()))),
+        ("{{STYLE_LORA_2_WEIGHT}}", json!(story.visual_config.style_loras.get(1).map(|l| l.weight).unwrap_or(0.0))),
     ];
     let character_loras = scene.selected_loras.iter().filter(|l| l.role == "character").take(2).collect::<Vec<_>>();
     let concept_lora = scene.selected_loras.iter().find(|l| l.role == "concept_pose");
     replacements.extend([
         ("{{CHARACTER_LORA_1}}", Value::String(character_loras.get(0).map(|l| l.file_name.clone()).unwrap_or_default())),
-        ("{{CHARACTER_LORA_1_WEIGHT}}", Value::String(character_loras.get(0).map(|l| l.weight.to_string()).unwrap_or_else(|| "0".into()))),
+        ("{{CHARACTER_LORA_1_WEIGHT}}", json!(character_loras.get(0).map(|l| l.weight).unwrap_or(0.0))),
         ("{{CHARACTER_LORA_2}}", Value::String(character_loras.get(1).map(|l| l.file_name.clone()).unwrap_or_default())),
-        ("{{CHARACTER_LORA_2_WEIGHT}}", Value::String(character_loras.get(1).map(|l| l.weight.to_string()).unwrap_or_else(|| "0".into()))),
+        ("{{CHARACTER_LORA_2_WEIGHT}}", json!(character_loras.get(1).map(|l| l.weight).unwrap_or(0.0))),
         ("{{CONCEPT_LORA}}", Value::String(concept_lora.map(|l| l.file_name.clone()).unwrap_or_default())),
-        ("{{CONCEPT_LORA_WEIGHT}}", Value::String(concept_lora.map(|l| l.weight.to_string()).unwrap_or_else(|| "0".into()))),
+        ("{{CONCEPT_LORA_WEIGHT}}", json!(concept_lora.map(|l| l.weight).unwrap_or(0.0))),
     ]);
     let replacement_refs = replacements.iter().map(|(token, value)| (*token, value.clone())).collect::<Vec<_>>();
     replace_workflow_placeholders(&mut workflow, &replacement_refs);
