@@ -698,7 +698,7 @@ pub async fn research_web(
     let mut sources = Vec::new();
 
     for (result_index, result) in results.into_iter().take(max_results).enumerate() {
-        let source_id = format!("S{}", sources.len() + 1);
+        let source_id = format!("S{}", result_index + 1);
         let source_hint = result.title.trim();
         emit_pipeline(
             app,
@@ -840,7 +840,7 @@ pub async fn research_web(
 
     let schema = r#"{"facts":[{"claim":"","evidence":"","source_ids":["S1"],"confidence":"high|medium|low"}]}"#;
     let user = format!(
-        "RESEARCH QUERY:\n{query}\n\nSOURCE MATERIAL:\n{context}\n\nExtract only facts that are directly supported by the source material.\nFor every fact, source_ids MUST contain existing IDs such as S1 or S2.\nFor every fact, evidence MUST be copied verbatim from one source page, using 8-40 words from that page.\nDo not paraphrase the evidence field.\nIf the sources do not support a useful fact, return an empty facts array instead of guessing.\nReturn:\n{schema}"
+        "RESEARCH QUERY:\n{query}\n\nSOURCE MATERIAL:\n{context}\n\nExtract only facts that are directly supported by the source material.\nFor every fact, source_ids MUST contain existing IDs such as S1 or S2.\nFor every fact, evidence MUST be copied verbatim from the cited source page or SearXNG search snippet, using 8-40 words when enough text is available.\nDo not paraphrase the evidence field. If a source has no fetched page text, its SEARCH SNIPPET is the available evidence.\nIf the sources do not support a useful fact, return an empty facts array instead of guessing.\nReturn:\n{schema}"
     );
 
     let raw = match chat(app, settings, "web_research", system, &user).await {
