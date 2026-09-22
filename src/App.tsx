@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, subscribeToComfy, subscribeToLlm, subscribeToPipeline } from './tauri';
 import type { AppSettings, AppState, Chapter, ComfyGenerationEvent, LlmGenerationEvent, PipelineEvent, RegistryCatalog, RegistryStatusDto, Scene, ServiceStatusBoard, Story, StoryVisualSetup } from './types';
 
@@ -40,89 +40,233 @@ function TagRow({ values, tone = '' }: { values: string[]; tone?: string }) {
   return <div className="tag-row">{splitTags(values).map(value => <span className={`tag ${tone}`} key={value}>{value}</span>)}</div>;
 }
 
-function NewStoryPanel({
-  busy, prompt, setPrompt, onGenerate, registryStatus, catalog, checkpointId, setCheckpointId, styleLoraIds, setStyleLoraIds,
+function RegistryModelChoiceCard({
+  model,
+  kind,
+  selected,
+  disabled,
+  onClick,
 }: {
-  busy: boolean; prompt: string; setPrompt: (v: string) => void; onGenerate: () => void;
-  registryStatus: RegistryStatusDto; catalog: RegistryCatalog; checkpointId: string; setCheckpointId: (v: string) => void;
-  styleLoraIds: string[]; setStyleLoraIds: (v: string[]) => void;
+  model: RegistryCatalog['checkpoints'][number];
+  kind: 'checkpoint' | 'lora';
+  selected: boolean;
+  disabled: boolean;
+  onClick: () => void;
 }) {
-  const toggleStyle = (id: string) => {
-    if (styleLoraIds.includes(id)) { setStyleLoraIds(styleLoraIds.filter(value => value !== id)); return; }
+  const mark = kind === 'checkpoint' ? 'CKPT' : 'LORA';
+  return <button
+    type="button"
+    className={"registry-choice-card" + (selected ? " selected" : "")}
+    onClick={onClick}
+    disabled={disabled}
+  >
+    <div className={"registry-choice-visual " + kind} aria-hidden="true">
+      <span>{mark}</span>
+      <i />
+      <b />
+    </div>
+    <div className="registry-choice-body">
+      <strong title={model.name}>{model.name}</strong>
+      <small>{model.base_model || 'BASE UNKNOWN'}</small>
+      {model.creator ? <em>{model.creator}</em> : null}
+    </div>
+    <span className="registry-choice-state" aria-hidden="true">{selected ? '✓' : ''}</span>
+  </button>;
+}
+
+function VisualSetupOverlay({
+  registryStatus,
+  catalog,
+  catalogError,
+  checkpointId,
+  setCheckpointId,
+  styleLoraIds,
+  setStyleLoraIds,
+  busy,
+  onClose,
+}: {
+  registryStatus: RegistryStatusDto;
+  catalog: RegistryCatalog;
+  catalogError: string | null;
+  checkpointId: string;
+  setCheckpointId: (value: string) => void;
+  styleLoraIds: string[];
+  setStyleLoraIds: (value: string[]) => void;
+  busy: boolean;
+  onClose: () => void;
+}) {
+  const toggleLora = (id: string) => {
+    if (styleLoraIds.includes(id)) {
+      setStyleLoraIds(styleLoraIds.filter(value => value !== id));
+      return;
+    }
     if (styleLoraIds.length >= 2) return;
     setStyleLoraIds([...styleLoraIds, id]);
   };
+
+  return <div className="model-selection-backdrop" onMouseDown={onClose}>
+    <section className="model-selection-panel hud-panel" onMouseDown={event => event.stopPropagation()}>
+      <header className="settings-header model-selection-header">
+        <div>
+          <div className="eyebrow">VISUAL PROFILE</div>
+          <h2>MODEL SELECTION</h2>
+        </div>
+        <button type="button" className="settings-close" onClick={onClose} aria-label="Close model selection">×</button>
+      </header>
+
+      <div className="model-selection-scroll">
+        {catalogError ? <div className="error-box settings-inline-error">{catalogError}</div> : null}
+
+        <section className="model-selection-section">
+          <div className="model-selection-section-head">
+            <div>
+              <div className="section-head">CHECKPOINT</div>
+              <p>Choose the base model for this story.</p>
+            </div>
+            <span className="selection-count">{checkpointId ? '1 SELECTED' : 'REQUIRED'}</span>
+          </div>
+          {registryStatus.status !== 'on'
+            ? <div className="model-selection-empty">{registryStatus.detail || 'Model Registry is unavailable.'}</div>
+            : catalog.checkpoints.length === 0
+              ? <div className="model-selection-empty">No checkpoints are registered.</div>
+              : <div className="registry-choice-grid">
+                  {catalog.checkpoints.map(model => (
+                    <RegistryModelChoiceCard
+                      key={model.id}
+                      model={model}
+                      kind="checkpoint"
+                      selected={checkpointId === model.id}
+                      disabled={busy}
+                      onClick={() => setCheckpointId(model.id)}
+                    />
+                  ))}
+                </div>}
+        </section>
+
+        <section className="model-selection-section">
+          <div className="model-selection-section-head">
+            <div>
+              <div className="section-head">STYLE LORAS</div>
+              <p>Choose up to two style models to keep locked across the story.</p>
+            </div>
+            <span className="selection-count">{styleLoraIds.length}/2</span>
+          </div>
+          {registryStatus.status !== 'on'
+            ? <div className="model-selection-empty">Connect the Model Registry to choose LoRAs.</div>
+            : catalog.loras.length === 0
+              ? <div className="model-selection-empty">No LoRAs are registered.</div>
+              : <div className="registry-choice-grid">
+                  {catalog.loras.map(model => (
+                    <RegistryModelChoiceCard
+                      key={model.id}
+                      model={model}
+                      kind="lora"
+                      selected={styleLoraIds.includes(model.id)}
+                      disabled={busy || (!styleLoraIds.includes(model.id) && styleLoraIds.length >= 2)}
+                      onClick={() => toggleLora(model.id)}
+                    />
+                  ))}
+                </div>}
+        </section>
+      </div>
+
+      <footer className="settings-footer model-selection-footer">
+        <span className="tiny">{styleLoraIds.length}/2 STYLE LORAS</span>
+        <button type="button" className="primary-btn" onClick={onClose}>DONE</button>
+      </footer>
+    </section>
+  </div>;
+}
+
+function NewStoryPanel({
+  busy,
+  prompt,
+  setPrompt,
+  onGenerate,
+  registryStatus,
+  catalog,
+  checkpointId,
+  styleLoraIds,
+  onOpenVisualSetup,
+}: {
+  busy: boolean;
+  prompt: string;
+  setPrompt: (v: string) => void;
+  onGenerate: () => void;
+  registryStatus: RegistryStatusDto;
+  catalog: RegistryCatalog;
+  checkpointId: string;
+  styleLoraIds: string[];
+  onOpenVisualSetup: () => void;
+}) {
+  const selectedCheckpoint = catalog.checkpoints.find(model => model.id === checkpointId);
+  const selectedLoras = catalog.loras.filter(model => styleLoraIds.includes(model.id));
+
   return <section className="hero-panel hud-panel">
     <div className="scan-corners" />
-    <div className="eyebrow">RAPHAEL STORY ENGINE · VISUAL PROFILE FIRST</div>
+    <div className="eyebrow">RAPHAEL STORY ENGINE</div>
     <h1>Turn a prompt into a living story.</h1>
-    <p className="hero-copy">Describe the story, then choose the base checkpoint and optional style LoRAs for its entire visual identity. Character and concept/pose LoRAs are selected scene-by-scene while the chosen style remains locked.</p>
-    <div className="visual-setup-grid">
-      <label className="visual-select">BASE CHECKPOINT<select value={checkpointId} onChange={e => setCheckpointId(e.target.value)} disabled={busy || registryStatus.status !== 'on'}>
-        <option value="">SELECT CHECKPOINT</option>{catalog.checkpoints.map(model => <option key={model.id} value={model.id}>{model.name}{model.base_model ? ' · ' + model.base_model : ''}</option>)}
-      </select></label>
-      <div className="style-picker"><div className="style-picker-head"><div><div className="section-head">LOCKED STYLE LORAS</div><span className="tiny">0–2 · FIXED FOR THIS STORY</span></div><span className="status-chip">{styleLoraIds.length}/2</span></div>
-        {registryStatus.status !== 'on' ? <div className="style-picker-note">Waiting for Model Registry…</div> : catalog.loras.length === 0 ? <div className="style-picker-note">No LoRAs are registered.</div> : <div className="style-options">
-          {catalog.loras.map(model => { const selected = styleLoraIds.includes(model.id); return <button type="button" className={'style-option ' + (selected ? 'selected' : '')} key={model.id} onClick={() => toggleStyle(model.id)} disabled={busy || (!selected && styleLoraIds.length >= 2)}><span className="style-option-check">{selected ? '✓' : '○'}</span><span><strong>{model.name}</strong><small>{model.base_model || 'BASE UNKNOWN'}</small></span></button>; })}
-        </div>}
-      </div>
+    <p className="hero-copy">Describe the story, then choose the visual models that define its identity. Character and concept/pose LoRAs are selected scene-by-scene.</p>
+
+    <button
+      type="button"
+      className="visual-setup-trigger"
+      onClick={onOpenVisualSetup}
+      disabled={busy}
+    >
+      <span className="visual-setup-trigger-mark" aria-hidden="true"><i /><b /></span>
+      <span className="visual-setup-trigger-copy">
+        <span className="eyebrow">VISUAL MODELS</span>
+        <strong>{selectedCheckpoint?.name || 'SELECT CHECKPOINT'}</strong>
+        <small>
+          {selectedLoras.length
+            ? selectedLoras.map(model => model.name).join(' · ')
+            : 'NO STYLE LORAS SELECTED'}
+        </small>
+      </span>
+      <span className="visual-setup-trigger-action">OPEN</span>
+    </button>
+
+    {registryStatus.status !== 'on' ? <div className="visual-setup-status">{registryStatus.detail || 'Model Registry is unavailable.'}</div> : null}
+
+    <textarea
+      className="story-prompt"
+      value={prompt}
+      onChange={event => setPrompt(event.target.value)}
+      placeholder="Example: A dark fantasy anime about a quiet academy student who discovers that the rival she dislikes is protecting a secret tied to her family..."
+      disabled={busy}
+      rows={6}
+    />
+    <div className="hero-actions">
+      <button
+        className="primary-btn"
+        onClick={onGenerate}
+        disabled={busy || !prompt.trim() || !checkpointId || registryStatus.status !== 'on'}
+      >
+        {busy ? 'BUILDING STORY BIBLE…' : 'GENERATE STORY'}
+      </button>
     </div>
-    <textarea className="story-prompt" value={prompt} onChange={event => setPrompt(event.target.value)} placeholder="Example: A dark fantasy anime about a quiet academy student who discovers that the rival she dislikes is protecting a secret tied to her family..." disabled={busy} rows={6}/>
-    <div className="hero-actions"><button className="primary-btn" onClick={onGenerate} disabled={busy || !prompt.trim() || !checkpointId || registryStatus.status !== 'on'}>{busy ? 'BUILDING STORY BIBLE…' : 'GENERATE STORY'}</button><span className="tiny">STYLE LOCKED · SCENE LORAS AUTO-SELECTED · REGISTRY-VALIDATED</span></div>
   </section>;
 }
 
-function ServiceHealthPanel({ status, onRefresh, refreshing }: { status: ServiceStatusBoard; onRefresh: () => void; refreshing: boolean }) {
+function ServiceHealthPanel({ status }: { status: ServiceStatusBoard }) {
   const items = [status.registry, status.searxng, status.comfyui];
   const label = (value: ServiceStatusBoard['registry']['status']) => value.toUpperCase();
   return <section className="hud-panel inspector-panel service-health-panel">
     <div className="panel-title-row">
-      <div><div className="section-head">RAPHAEL SERVICES</div><span className="tiny">LIVE API HEALTH · POLLED FROM THE ACTUAL ENDPOINTS</span></div>
-      <button type="button" className="mini-btn" onClick={onRefresh} disabled={refreshing}>{refreshing ? 'CHECKING…' : 'RECHECK'}</button>
+      <div><div className="section-head">RAPHAEL SERVICES</div><span className="tiny">LIVE API HEALTH</span></div>
     </div>
     <div className="service-health-list">
       {items.map(item => (
         <div className="service-health-item" key={item.service} title={item.detail || item.url}>
           <span className={'service-health-dot ' + item.status}><i /></span>
-          <div className="service-health-copy"><strong>{item.service.toUpperCase()}</strong><small>{label(item.status)} · {item.url}</small>{item.detail ? <em>{item.detail}</em> : null}</div>
+          <div className="service-health-copy">
+            <strong>{item.service.toUpperCase()}</strong>
+            <small>{label(item.status)}</small>
+          </div>
         </div>
       ))}
     </div>
-  </section>;
-}
-
-function RegistryPanel({ status, catalog, error }: { status: RegistryStatusDto; catalog: RegistryCatalog; error: string | null }) {
-  const statusLabel = status.status === 'on' ? 'ON' : status.status === 'starting' ? 'STARTING' : 'OFF';
-  const renderModelList = (models: RegistryCatalog['checkpoints']) => models.slice(0, 6).map(model => (
-    <div className="registry-model" key={model.id} title={model.base_model ? `${model.name} · ${model.base_model}` : model.name}>
-      <span>{model.name}</span>
-      <small>{model.base_model || 'BASE UNKNOWN'}</small>
-    </div>
-  ));
-
-  return <section className="hud-panel inspector-panel registry-panel">
-    <div className="registry-panel-head">
-      <div>
-        <div className="section-head">MODEL REGISTRY</div>
-        <span className="tiny">{status.url}</span>
-      </div>
-      <span className={`registry-state ${status.status}`}><i />{statusLabel}</span>
-    </div>
-    {status.status === 'on' ? <>
-      <div className="registry-counts">
-        <div><span>CHECKPOINTS</span><b>{catalog.checkpoint_total}</b></div>
-        <div><span>LORAS</span><b>{catalog.lora_total}</b></div>
-      </div>
-      {error ? <div className="registry-error">{error}</div> : null}
-      <div className="registry-list-group">
-        <div className="registry-list-title">CHECKPOINTS</div>
-        {catalog.checkpoints.length ? renderModelList(catalog.checkpoints) : <div className="registry-empty">No checkpoints registered.</div>}
-      </div>
-      <div className="registry-list-group">
-        <div className="registry-list-title">LORAS</div>
-        {catalog.loras.length ? renderModelList(catalog.loras) : <div className="registry-empty">No LoRAs registered.</div>}
-      </div>
-    </> : <div className="registry-offline">{status.detail || (status.status === 'starting' ? 'Starting Raphael Model Registry…' : 'Registry is not running.')}</div>}
   </section>;
 }
 
@@ -366,7 +510,7 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
       setResearchTesting(false);
     }
   };
-  return <div className="overlay" onMouseDown={onClose}><section className="settings-panel hud-panel" onMouseDown={e => e.stopPropagation()}>
+  return <div className="settings-backdrop" onMouseDown={onClose}><section className="settings-panel hud-panel" onMouseDown={e => e.stopPropagation()}>
     <header className="settings-header"><div><div className="eyebrow">RAPHAEL CORE</div><h2>ENGINE SETTINGS</h2></div><button className="settings-close" onClick={onClose}>×</button></header>
     <div className="settings-scroll">
       <div className="section-head">OPENAI-COMPATIBLE LLM</div>
@@ -408,7 +552,7 @@ export default function App() {
   const [state, setState] = useState<AppState | null>(null); const [story, setStory] = useState<Story | null>(null);
   const [prompt, setPrompt] = useState(''); const [directive, setDirective] = useState('');
   const [busy, setBusy] = useState(false); const [extracting, setExtracting] = useState(false); const [buildingPrompt, setBuildingPrompt] = useState<string | null>(null); const [queueing, setQueueing] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null); const [settingsOpen, setSettingsOpen] = useState(false); const [promptPreview, setPromptPreview] = useState<Scene | null>(null);
+  const [error, setError] = useState<string | null>(null); const [settingsOpen, setSettingsOpen] = useState(false); const [visualSetupOpen, setVisualSetupOpen] = useState(false); const [promptPreview, setPromptPreview] = useState<Scene | null>(null);
   const [registryStatus, setRegistryStatus] = useState<RegistryStatusDto>({ status: 'starting', url: 'http://127.0.0.1:43217', detail: 'Starting Raphael Model Registry…' });
   const [registryCatalog, setRegistryCatalog] = useState<RegistryCatalog>({ checkpoints: [], checkpoint_total: 0, loras: [], lora_total: 0 });
   const [registryCatalogError, setRegistryCatalogError] = useState<string | null>(null);
@@ -424,7 +568,6 @@ export default function App() {
     searxng: { service: 'searxng', status: 'checking', url: 'http://127.0.0.1:8080', detail: 'Checking SearXNG API…' },
     comfyui: { service: 'comfyui', status: 'checking', url: 'http://127.0.0.1:8188', detail: 'Checking ComfyUI API…' },
   });
-  const [serviceRefreshing, setServiceRefreshing] = useState(false);
   const serviceProbeActive = useRef(false);
 
 
@@ -585,7 +728,6 @@ export default function App() {
   const refreshServiceStatus = async () => {
     if (serviceProbeActive.current) return;
     serviceProbeActive.current = true;
-    setServiceRefreshing(true);
     try {
       setServiceStatus(await api.getServiceStatus());
     } catch (e) {
@@ -597,7 +739,6 @@ export default function App() {
       }));
     } finally {
       serviceProbeActive.current = false;
-      setServiceRefreshing(false);
     }
   };
 
@@ -681,7 +822,6 @@ export default function App() {
   const currentChapter = story
     ? story.chapters.find(chapter => chapter.number === selectedChapterNumber) || story.chapters[story.chapters.length - 1] || null
     : null;
-  const totalScenes = useMemo(() => story?.chapters.reduce((n, c) => n + c.scenes.length, 0) || 0, [story]);
   const researchTrace = generationTraces.slice().reverse().find(trace => trace.stage.includes('research')) || null;
 
   if (!state) return (
@@ -712,19 +852,23 @@ export default function App() {
     <BackgroundRaphael />
     <header className="topbar">
       <div className="brand"><PulseMark/><div><div className="brand-title">RAPHAEL</div><div className="brand-subtitle">STORY GENERATOR</div></div></div>
-      <div className="top-status"><span className={state.llm_configured ? 'status-ok' : 'status-warn'}>LLM {state.llm_configured ? 'READY' : 'NOT CONFIGURED'}</span><span className={`registry-health ${serviceStatus.registry.status}`} title={serviceStatus.registry.detail || serviceStatus.registry.url}><i />REGISTRY {serviceStatus.registry.status.toUpperCase()}</span><span className={'service-inline ' + serviceStatus.searxng.status}>SEARXNG {serviceStatus.searxng.status.toUpperCase()}</span><span className={'service-inline ' + serviceStatus.comfyui.status}>COMFYUI {serviceStatus.comfyui.status.toUpperCase()}</span><span>SCENES {totalScenes}</span><span className={generationTraces.some(g => g.status === 'started' || g.status === 'token') ? 'status-ok' : ''}>TRACE {generationTraces.length}</span><button className="icon-btn" onClick={() => setSettingsOpen(true)} title="Engine settings">⚙</button></div>
     </header>
 
     <div className="workspace">
       <aside className="sidebar">
         <div className="sidebar-head"><div><div className="eyebrow">LIBRARY</div><h2>STORIES</h2></div><button className="square-btn" disabled={busy || extracting || Boolean(buildingPrompt) || Boolean(queueing)} onClick={() => { setStory(null); setPrompt(''); setDirective(''); setPromptPreview(null); }}>+</button></div>
         <div className="story-list">{state.stories.length === 0 ? <div className="empty-sidebar">No stories yet.<br/>Create the first one from the story prompt.</div> : state.stories.map(item => <StoryCard key={item.id} story={item} selected={story?.id === item.id} disabled={busy || extracting || Boolean(buildingPrompt) || Boolean(queueing)} onClick={() => void selectStory(item.id)}/>)}</div>
-        <div className="sidebar-foot">LOCAL-FIRST · CANON SAVED TO APP DATA</div>
+        <ServiceHealthPanel status={serviceStatus}/>
+        <div className="sidebar-foot">
+          <button type="button" className="settings-trigger" aria-label="Open settings" title="SETTINGS" onClick={() => setSettingsOpen(true)}>
+            <span aria-hidden="true">⚙</span><b>SETTINGS</b>
+          </button>
+        </div>
       </aside>
 
       <main className="main-panel">
         {error ? <div className="error-banner error-box" role="alert"><strong>PIPELINE ERROR</strong><span>{error}</span><button type="button" className="mini-btn" onClick={() => setError(null)}>DISMISS</button></div> : null}
-        {!story ? <NewStoryPanel busy={busy} prompt={prompt} setPrompt={setPrompt} onGenerate={() => void generateStory()} registryStatus={registryStatus} catalog={registryCatalog} checkpointId={checkpointId} setCheckpointId={setCheckpointId} styleLoraIds={styleLoraIds} setStyleLoraIds={setStyleLoraIds}/> : <>
+        {!story ? <NewStoryPanel busy={busy} prompt={prompt} setPrompt={setPrompt} onGenerate={() => void generateStory()} registryStatus={registryStatus} catalog={registryCatalog} checkpointId={checkpointId} styleLoraIds={styleLoraIds} onOpenVisualSetup={() => setVisualSetupOpen(true)}/> : <>
           <section className="story-header hud-panel">
             <div><div className="eyebrow">STORY BIBLE · {story.id.slice(0, 8).toUpperCase()}</div><h1>{story.title}</h1><p>{story.bible.premise}</p><label className="chapter-selector">VIEW CHAPTER<select value={selectedChapterNumber ?? story.chapters[story.chapters.length - 1]?.number ?? 1} onChange={e => setSelectedChapterNumber(Number(e.target.value))}>{story.chapters.map(chapter => <option key={chapter.number} value={chapter.number}>CHAPTER {chapter.number} · {chapter.title}</option>)}</select></label></div>
             <div className="story-header-tags"><TagRow values={story.metadata.tone} tone="tone"/></div>
@@ -742,18 +886,27 @@ export default function App() {
       </main>
 
       <aside className="inspector">
-        <ServiceHealthPanel status={serviceStatus} onRefresh={() => void refreshServiceStatus()} refreshing={serviceRefreshing}/>
-        <RegistryPanel status={registryStatus} catalog={registryCatalog} error={registryCatalogError}/>
         <GenerationMonitor
           generations={generationTraces}
           pipeline={pipelineTrace}
           onClear={() => { setGenerationTraces([]); setPipelineTrace([]); }}
         />
         {story ? <ResearchPanel story={story} researchTrace={researchTrace}/> : null}
-        {story ? <MetadataPanel story={story}/> : <section className="hud-panel inspector-panel placeholder-inspector"><div className="section-head">PIPELINE</div><div className="pipeline-step active"><b>01</b><span>STORY BIBLE</span></div><div className="pipeline-step"><b>02</b><span>CHAPTERS</span></div><div className="pipeline-step"><b>03</b><span>SCENE EXTRACTION</span></div><div className="pipeline-step"><b>04</b><span>IMAGE BUILDER</span></div><div className="pipeline-note">The story engine is designed so scene extraction and ComfyUI image generation can run without changing the story canon.</div></section>}
+        {story ? <MetadataPanel story={story}/> : null}
       </aside>
     </div>
 
+    {visualSetupOpen ? <VisualSetupOverlay
+      registryStatus={registryStatus}
+      catalog={registryCatalog}
+      catalogError={registryCatalogError}
+      checkpointId={checkpointId}
+      setCheckpointId={setCheckpointId}
+      styleLoraIds={styleLoraIds}
+      setStyleLoraIds={setStyleLoraIds}
+      busy={busy}
+      onClose={() => setVisualSetupOpen(false)}
+    /> : null}
     {promptPreview ? <div className="overlay" onMouseDown={() => setPromptPreview(null)}><section className="prompt-viewer hud-panel" onMouseDown={e => e.stopPropagation()}><header className="settings-header"><div><div className="eyebrow">IMAGE BUILDER</div><h2>SCENE {String(promptPreview.order).padStart(2, '0')} PROMPTS</h2></div><button className="settings-close" onClick={() => setPromptPreview(null)}>×</button></header><div className="prompt-viewer-body"><div><div className="section-head">IMAGE SIZE</div><div className="scene-image-size prompt-size">{promptPreview.image_width}×{promptPreview.image_height}</div><div className="section-head">POSITIVE PROMPT</div><pre className="prompt-box">{promptPreview.positive_prompt}</pre></div><div><div className="section-head">NEGATIVE PROMPT</div><pre className="prompt-box">{promptPreview.negative_prompt}</pre></div></div></section></div> : null}
     {settingsOpen ? <SettingsOverlay
       settings={state.settings}
