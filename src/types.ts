@@ -112,3 +112,26 @@ export interface SceneExtractionResult {
 export interface CommandResult {
   message: string;
 }
+
+
+export type RegistryStatus = 'off' | 'starting' | 'on';
+
+export interface RegistryStatusDto {
+  status: RegistryStatus;
+  url: string;
+  detail: string | null;
+}
+
+export interface RegistryModel {
+  id: string;
+  name: string;
+  model_type: string;
+  base_model: string | null;
+  creator: string | null;
+  revision: number;
+}
+
+export interface RegistryCatalog {
+  checkpoints: RegistryModel[];
+  loras: RegistryModel[];
+}
