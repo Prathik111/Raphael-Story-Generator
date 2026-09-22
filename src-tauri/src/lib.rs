@@ -487,13 +487,35 @@ fn looks_like_concept_pose_lora(value: &str) -> bool {
 }
 
 fn lora_candidate_text(model: &registry::RegistryLoraCandidate) -> String {
+    let description = model.description.as_deref().unwrap_or("no description");
+    let tags = if model.tags.is_empty() {
+        "none".to_string()
+    } else {
+        model.tags.join(", ")
+    };
+    let triggers = if model.activation_prompts.is_empty() {
+        "none".to_string()
+    } else {
+        model.activation_prompts.join(" | ")
+    };
+
     format!(
-        "ID: {} | NAME: {} | BASE: {} | CREATOR: {} | DESCRIPTION: {}",
+        "ID: {}
+MODEL TYPE: {}
+NAME: {}
+BASE MODEL: {}
+CREATOR: {}
+TAGS: {}
+DESCRIPTION: {}
+ACTIVATION / TRIGGER PROMPTS: {}",
         model.id,
+        model.model_type,
         model.name,
         model.base_model.as_deref().unwrap_or("unknown"),
         model.creator.as_deref().unwrap_or("unknown"),
-        model.description.as_deref().unwrap_or(""),
+        tags,
+        description,
+        triggers,
     )
 }
 
@@ -1081,6 +1103,16 @@ async fn select_scene_loras(
 
     let system = r#"
 You are Raphael LoRA Selector. Select dynamic LoRAs for one image scene.
+
+The candidate metadata comes directly from the Raphael Model Registry. Treat these fields as authoritative model metadata:
+- MODEL TYPE
+- BASE MODEL
+- TAGS
+- DESCRIPTION
+- ACTIVATION / TRIGGER PROMPTS
+
+Use tags and description to determine the LoRA's semantic purpose. Use activation/trigger prompts when they provide useful clues about what the model expects in the prompt. Do not infer a model's purpose only from its name when registry metadata contradicts the name.
+
 The story's style LoRAs are LOCKED separately and must never be replaced, supplemented or switched here.
 Choose at most one character LoRA for each of the first two visible primary characters, and at most one concept/pose LoRA when it materially helps the scene.
 Do not select style LoRAs. Do not select the same LoRA twice. Do not invent IDs.
@@ -1098,6 +1130,9 @@ CHARACTERS IN SCENE:
 
 CANDIDATES:
 {}
+
+For each selected LoRA, the reason should reference the actual registry metadata that made it relevant (for example a tag, description phrase, or trigger prompt).
+Do not claim capabilities that are not supported by the supplied metadata.
 
 Return:
 {}",
