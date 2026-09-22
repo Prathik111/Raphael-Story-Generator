@@ -3,6 +3,10 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        RwLock,
+    },
     time::Duration,
 };
 use tauri::{AppHandle, Manager};
@@ -15,6 +19,23 @@ const DEFAULT_PROXY_URL: &str = "socks5h://127.0.0.1:9050";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 const SECRET_FILE: &str = ".searxng-secret";
+
+static STARTING: AtomicBool = AtomicBool::new(false);
+static LAST_ERROR: RwLock<Option<String>> = RwLock::new(None);
+
+pub fn is_starting() -> bool {
+    STARTING.load(Ordering::Acquire)
+}
+
+pub fn last_error() -> Option<String> {
+    LAST_ERROR.read().ok().and_then(|value| value.clone())
+}
+
+fn set_last_error(value: Option<String>) {
+    if let Ok(mut guard) = LAST_ERROR.write() {
+        *guard = value;
+    }
+}
 
 fn compose_dir(app: &AppHandle) -> AppResult<PathBuf> {
     let packaged = app
@@ -147,34 +168,76 @@ async fn docker_compose_up(dir: &Path) -> AppResult<()> {
 
 pub async fn ensure_started_with_settings(app: &AppHandle, settings: &crate::AppSettings) -> AppResult<()> {
     if research::check_private_search(settings).await.is_ok() {
+        set_last_error(None);
         return Ok(());
     }
 
     if settings.web_search_url.trim() != DEFAULT_SEARCH_URL
         || settings.web_proxy_url.trim() != DEFAULT_PROXY_URL
     {
-        return Err(AppError::WebResearch(
+        let error = AppError::WebResearch(
             "automatic gateway startup only supports Raphael's bundled local SearXNG/Tor endpoints; the configured custom endpoints are not running".into(),
-        ));
+        );
+        set_last_error(Some(error.to_string()));
+        return Err(error);
     }
 
-
-    let runtime = install_runtime_files(app)?;
-    docker_compose_up(&runtime).await?;
-
-    timeout(STARTUP_TIMEOUT, async {
-        loop {
-            if research::check_private_search(settings).await.is_ok() {
-                return Ok(());
+    if STARTING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        let result = timeout(STARTUP_TIMEOUT, async {
+            loop {
+                if research::check_private_search(settings).await.is_ok() {
+                    return Ok(());
+                }
+                sleep(POLL_INTERVAL).await;
             }
-            sleep(POLL_INTERVAL).await;
+        })
+        .await
+        .map_err(|_| {
+            AppError::WebResearch(format!(
+                "private web research gateway did not become ready within {} seconds",
+                STARTUP_TIMEOUT.as_secs()
+            ))
+        })?;
+
+        if let Err(error) = &result {
+            set_last_error(Some(error.to_string()));
         }
-    })
-    .await
-    .map_err(|_| {
-        AppError::WebResearch(format!(
-            "private web research gateway did not become ready within {} seconds",
-            STARTUP_TIMEOUT.as_secs()
-        ))
-    })?
+        return result;
+    }
+
+    set_last_error(None);
+
+    let result = async {
+        let runtime = install_runtime_files(app)?;
+        docker_compose_up(&runtime).await?;
+
+        timeout(STARTUP_TIMEOUT, async {
+            loop {
+                if research::check_private_search(settings).await.is_ok() {
+                    return Ok(());
+                }
+                sleep(POLL_INTERVAL).await;
+            }
+        })
+        .await
+        .map_err(|_| {
+            AppError::WebResearch(format!(
+                "private web research gateway did not become ready within {} seconds",
+                STARTUP_TIMEOUT.as_secs()
+            ))
+        })?
+    }
+    .await;
+
+    STARTING.store(false, Ordering::Release);
+
+    match &result {
+        Ok(()) => set_last_error(None),
+        Err(error) => set_last_error(Some(error.to_string())),
+    }
+
+    result
 }
