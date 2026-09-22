@@ -197,6 +197,10 @@ function ResearchPanel({ story, researchTrace }: { story: Story; researchTrace: 
             <div className="research-source-head"><span className="research-source-id">{source.id}</span><strong>{source.title || source.url}</strong></div>
             <small>{source.url}</small>
             {source.snippet ? <p className="research-snippet">{source.snippet}</p> : null}
+            {source.content ? <details className="research-source-text">
+              <summary><span>VIEW FETCHED TEXT</span><small>{source.content.length.toLocaleString()} CHARS</small></summary>
+              <pre>{source.content.slice(0, 3000)}{source.content.length > 3000 ? '\n…[TRUNCATED IN UI]…' : ''}</pre>
+            </details> : null}
           </article>
         ))}
       </div>
