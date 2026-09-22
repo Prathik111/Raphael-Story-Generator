@@ -240,7 +240,7 @@ export interface LlmGenerationEvent {
   error: string | null;
 }
 
-export type PipelineTraceStatus = 'started' | 'completed' | 'error';
+export type PipelineTraceStatus = 'started' | 'completed' | 'skipped' | 'error';
 
 export interface ComfyGenerationEvent {
   story_id: string;
