@@ -92,7 +92,7 @@
 .chapter-selector{display:flex;align-items:center;gap:7px;margin-top:12px;font-size:6px;letter-spacing:.13em;color:rgba(205,232,244,.43)}
 .chapter-selector select{height:28px;min-width:220px;padding:0 8px;border:1px solid rgba(255,255,255,.12);background:rgba(0,0,0,.28);color:#eaf4f8;font-size:7px;outline:none}
 .chapter-selector select:focus{border-color:rgba(168,216,240,.4)}
-.scene-image{display:block;width:100%;max-height:420px;object-fit:contain;margin:10px 0 4px;border:1px solid rgba(255,255,255,.08);background:#020405}
+.scene-image{display:block;width:100%;height:260px;aspect-ratio:16/10;object-fit:cover;object-position:center;margin:10px 0 4px;border:1px solid rgba(255,255,255,.08);background:#020405}
 .scene-progress{margin-top:9px;padding:8px;border:1px solid rgba(168,216,240,.12);background:rgba(168,216,240,.025)}
 .scene-progress-head{display:flex;justify-content:space-between;gap:10px;font-size:7px;line-height:1.35;color:rgba(225,239,246,.58)}
 .scene-progress-head b{font-weight:500;color:rgba(168,216,240,.8)}
@@ -413,6 +413,8 @@ html{scrollbar-color:rgba(168,216,240,.28) rgba(0,0,0,.18);scrollbar-width:thin}
   position:relative;
   min-width:0;
   padding:0;
+  content-visibility:auto;
+  contain-intrinsic-size:175px;
   border:1px solid rgba(255,255,255,.13);
   background:rgba(0,0,0,.28);
   color:#eef6f8;
@@ -467,6 +469,13 @@ html{scrollbar-color:rgba(168,216,240,.28) rgba(0,0,0,.18);scrollbar-width:thin}
 .registry-choice-visual b{transform:rotate(114deg);border-color:rgba(255,255,255,.08)}
 .registry-choice-visual.lora{background:radial-gradient(circle at 50% 45%,rgba(229,226,198,.13),transparent 36%),linear-gradient(145deg,rgba(255,255,255,.05),rgba(0,0,0,.08))}
 .registry-choice-visual.lora span{color:rgba(229,226,198,.7)}
+.registry-choice-thumbnail{
+  position:absolute;
+  inset:0;
+  z-index:1;
+  overflow:hidden;
+  pointer-events:none;
+}
 .registry-choice-visual img{
   position:absolute;
   inset:0;
