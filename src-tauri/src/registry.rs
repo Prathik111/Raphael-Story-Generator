@@ -239,7 +239,7 @@ impl RegistryState {
         )
     }
 
-    async fn client(&self) -> AppResult<RegistryClient> {
+    pub async fn client(&self) -> AppResult<RegistryClient> {
         if !self.health().await {
             let status = self.ensure_running().await;
             if !matches!(status.status, RegistryStatus::On) {
