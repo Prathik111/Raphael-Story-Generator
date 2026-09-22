@@ -42,10 +42,11 @@ Raphael -> localhost SearXNG -> Tor -> Internet search engines
 
 SearXNG is configured to route its outbound engine requests through Tor. Raphael also fetches each selected source page through the local Tor proxy, extracts readable text locally, and sends only the retrieved source context to the configured LLM for citation-backed fact extraction. Research facts and source URLs are persisted with the story.
 
-Start the gateway from `privacy-search/`:
+The desktop application now starts the bundled gateway automatically when it opens if the local SearXNG/Tor endpoints are not already healthy. It installs the gateway files into the app's local data directory, generates a local SearXNG secret, starts Docker Compose, and waits for both SearXNG and Tor routing to become ready.
+
+For manual operation or troubleshooting, the same stack can be started from `privacy-search/`:
 
 ~~~powershell
-$env:SEARXNG_SECRET = [guid]::NewGuid().ToString("N")
 docker compose up -d --build
 ~~~
 
