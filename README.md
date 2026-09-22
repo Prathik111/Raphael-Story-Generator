@@ -53,6 +53,8 @@ The default endpoints are `http://127.0.0.1:8080` for SearXNG and `socks5h://127
 
 The web-research extractor requires every factual claim to include source IDs and evidence. The Story Architect receives those source-backed facts and source URLs rather than being told to rely on its pretrained knowledge for external facts.
 
+Privacy boundary: the search and source-fetch path can be kept local/Tor, but an LLM configured to a remote provider will still receive the user prompt and extracted research as part of generation. For end-to-end local privacy, use a local LLM endpoint such as Ollama together with the private gateway.
+
 ## LLM configuration
 
 The engine uses an OpenAI-compatible `/chat/completions` endpoint so it can point at local or remote providers. Web research is a separate network path: the search query and fetched web content go through the local privacy gateway first. The default configuration is intended for a local Ollama-style endpoint:
