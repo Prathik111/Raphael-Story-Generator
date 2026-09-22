@@ -41,6 +41,8 @@ export const api = {
   ensureRegistry: () => command<RegistryStatusDto>('ensure_registry'),
   getRegistryStatus: () => command<RegistryStatusDto>('get_registry_status'),
   getRegistryModels: () => command<RegistryCatalog>('get_registry_models'),
+  getRegistryModelThumbnails: (modelIds: string[]) =>
+    command<Record<string, string>>('get_registry_model_thumbnails', { modelIds }),
   getServiceStatus: () => command<ServiceStatusBoard>('get_service_status'),
   buildComfyUiWorkflow: (workflow: unknown, loraStack: WorkflowLoraInput[], checkpointNode: string | null, imageWidth: number, imageHeight: number) =>
     command<WorkflowBuildResult>('build_comfyui_workflow', { workflow, loraStack, checkpointNode, imageWidth, imageHeight }),
