@@ -105,3 +105,42 @@
 .settings-clear-key{display:block;margin-top:6px;color:rgba(248,204,204,.62)}
 @keyframes scene-progress-slide{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
 @media(max-width:780px){.chapter-selector{align-items:flex-start;flex-direction:column}.chapter-selector select{width:100%;min-width:0}}
+
+
+/* Raphael ambient core and service health */
+.app-shell{position:relative;isolation:isolate}
+.topbar,.workspace{position:relative;z-index:2}
+.background-raphael{position:fixed;inset:0;z-index:0;display:grid;place-items:center;pointer-events:none;overflow:hidden;opacity:.075}
+.background-raphael .raphael-core{transform:scale(11);animation:raphael-breathe 9s ease-in-out infinite}
+.background-raphael .core-orbit{animation-duration:7s;opacity:.45}
+@keyframes raphael-breathe{0%,100%{opacity:.42;transform:scale(9.5)}50%{opacity:.75;transform:scale(11)}}
+@media(prefers-reduced-motion:reduce){.background-raphael .raphael-core{animation:none;transform:scale(10);opacity:.55}}
+
+.mini-btn{min-height:26px;padding:0 9px;border:1px solid rgba(168,216,240,.18);background:rgba(255,255,255,.035);color:rgba(205,232,244,.62);font-size:6px;letter-spacing:.1em;cursor:pointer;transition:background .15s ease,border-color .15s ease,color .15s ease}
+.mini-btn:hover{background:rgba(168,216,240,.08);border-color:rgba(168,216,240,.34);color:#eef8fb}
+.mini-btn:disabled{opacity:.45;cursor:default}
+.mini-btn.danger,.settings-clear-key{border-color:rgba(218,130,130,.18);color:rgba(248,204,204,.62)}
+.mini-btn.danger:hover,.settings-clear-key:hover{background:rgba(110,30,30,.14);border-color:rgba(218,130,130,.34)}
+.service-inline{padding-left:4px}
+.service-inline.online{color:rgba(175,226,194,.72)}
+.service-inline.offline{color:rgba(248,180,180,.67)}
+.service-inline.disabled{color:rgba(255,255,255,.28)}
+.service-inline.checking{color:rgba(229,226,198,.62)}
+.service-health-list{display:flex;flex-direction:column;gap:7px;margin-top:10px}
+.service-health-item{display:flex;align-items:flex-start;gap:8px;padding:8px;border:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.015)}
+.service-health-dot{display:grid;place-items:center;width:10px;height:10px;margin-top:2px;border-radius:50%;border:1px solid currentColor;flex:0 0 10px;opacity:.72}
+.service-health-dot i{width:4px;height:4px;border-radius:50%;background:currentColor}
+.service-health-dot.online{color:#9fd9b5}.service-health-dot.offline{color:#d79d9d}.service-health-dot.disabled{color:#777}.service-health-dot.checking{color:#ded4a7}.service-health-dot.checking i{animation:service-check-pulse 1.5s ease-in-out infinite}
+.service-health-copy{min-width:0}.service-health-copy strong{display:block;font-size:6px;font-weight:500;letter-spacing:.12em;color:rgba(229,243,248,.64)}.service-health-copy small,.service-health-copy em{display:block;font-size:5px;line-height:1.4;color:rgba(255,255,255,.28);font-style:normal;word-break:break-word}.service-health-copy em{margin-top:3px;color:rgba(255,255,255,.22)}
+@keyframes service-check-pulse{0%,100%{opacity:.35;transform:scale(.7)}50%{opacity:1;transform:scale(1.05)}}
+
+.scene-image-size{margin-top:5px;font-size:5px;letter-spacing:.1em;color:rgba(168,216,240,.4)}
+.research-query-block{margin-top:8px}
+.research-result{padding:8px 0}
+.research-source-head{display:flex;align-items:center;gap:6px;min-width:0}
+.research-source-head strong{font-size:7px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.research-snippet{margin:5px 0 0;font-size:6px;line-height:1.55;color:rgba(225,239,246,.35)}
+.research-llm-trace{margin-top:10px;border-top:1px solid rgba(255,255,255,.06);padding-top:8px}
+.research-llm-trace summary{display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer}
+.research-llm-trace .trace-box{margin-top:7px;max-height:220px}
+.settings-inline-error{margin:0;border-left:0}
