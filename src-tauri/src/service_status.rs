@@ -6,7 +6,6 @@ use serde::Serialize;
 pub enum ServiceHealthStatus {
     Online,
     Offline,
-    Disabled,
     Checking,
 }
 
@@ -39,18 +38,24 @@ pub async fn probe(registry: &RegistryState, settings: &AppSettings) -> ServiceS
     };
 
     let searxng = match research::check_search_api(settings).await {
-            Ok(()) => ServiceStatusDto {
-                service: "searxng".into(),
-                status: ServiceHealthStatus::Online,
-                url: settings.web_search_url.clone(),
-                detail: Some(if settings.web_research_enabled { "SearXNG search API responded successfully.".into() } else { "SearXNG API is online; private research is disabled in settings.".into() }),
-            },
-            Err(error) => ServiceStatusDto {
-                service: "searxng".into(),
-                status: ServiceHealthStatus::Offline,
-                url: settings.web_search_url.clone(),
-                detail: Some(error.to_string()),
-            },
+        Ok(()) => ServiceStatusDto {
+            service: "searxng".into(),
+            status: ServiceHealthStatus::Online,
+            url: settings.web_search_url.clone(),
+            detail: Some(
+                if settings.web_research_enabled {
+                    "SearXNG search API responded successfully.".into()
+                } else {
+                    "SearXNG API is online; private research is disabled in settings.".into()
+                },
+            ),
+        },
+        Err(error) => ServiceStatusDto {
+            service: "searxng".into(),
+            status: ServiceHealthStatus::Offline,
+            url: settings.web_search_url.clone(),
+            detail: Some(error.to_string()),
+        },
     };
 
     let comfyui = match comfyui::check_api(&settings.comfyui_url).await {
