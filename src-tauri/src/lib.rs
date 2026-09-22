@@ -1936,7 +1936,19 @@ async fn get_service_status(
         Ok(value) => value.clone(),
         Err(_) => AppSettings::default(),
     };
-    Ok(service_status::probe(&registry, &settings).await)
+
+    let board = service_status::probe(&registry, &settings).await;
+
+    if matches!(board.comfyui.status, service_status::ServiceHealthStatus::Online)
+        && board.comfyui.url != settings.comfyui_url
+    {
+        if let Ok(mut current) = store.settings.write() {
+            current.comfyui_url = board.comfyui.url.clone();
+            let _ = store.persist_settings();
+        }
+    }
+
+    Ok(board)
 }
 
 #[tauri::command]
@@ -1962,11 +1974,12 @@ pub fn run() {
             let comfyui_url = web_settings.comfyui_url.clone();
             app.manage(store);
 
-            if web_settings.web_research_enabled {
+            {
                 let handle = app.handle().clone();
+                let startup_settings = web_settings.clone();
                 tauri::async_runtime::spawn(async move {
                     if let Err(error) =
-                        privacy_gateway::ensure_started_with_settings(&handle, &web_settings).await
+                        privacy_gateway::ensure_started_with_settings(&handle, &startup_settings).await
                     {
                         eprintln!("Raphael private web research gateway startup failed: {error}");
                     }
