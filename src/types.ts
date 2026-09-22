@@ -122,6 +122,11 @@ export interface AppSettings {
   llm_model: string;
   llm_api_key: string;
   temperature: number;
+  story_architect_system_prompt: string;
+  continuity_writer_system_prompt: string;
+  scene_director_system_prompt: string;
+  lora_selector_system_prompt: string;
+  image_prompt_generator_system_prompt: string;
   comfyui_url: string;
   comfyui_workflow_json: string;
 }
@@ -169,4 +174,27 @@ export interface RegistryCatalog {
 export interface StoryVisualSetup {
   checkpoint_id: string;
   style_lora_ids: string[];
+}
+
+export type LlmTraceStatus = 'started' | 'token' | 'completed' | 'error';
+
+export interface LlmGenerationEvent {
+  generation_id: string;
+  stage: string;
+  status: LlmTraceStatus;
+  model: string;
+  system_prompt: string | null;
+  user_prompt: string | null;
+  delta: string | null;
+  response: string | null;
+  error: string | null;
+}
+
+export type PipelineTraceStatus = 'started' | 'completed' | 'error';
+
+export interface PipelineEvent {
+  event_id: string;
+  stage: string;
+  status: PipelineTraceStatus;
+  message: string;
 }
