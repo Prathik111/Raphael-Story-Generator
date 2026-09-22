@@ -1721,6 +1721,7 @@ mod tests {
             id: "../outside".into(),
             title: "Story".into(),
             source_prompt: String::new(),
+            research: ResearchBundle::default(),
             metadata: StoryMetadata::default(),
             visual_config: StoryVisualConfig::default(),
             introduction: String::new(),
