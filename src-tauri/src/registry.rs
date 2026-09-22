@@ -441,15 +441,15 @@ fn spawn_hidden(mut command: std::process::Command) -> std::io::Result<std::proc
 
 #[tauri::command]
 pub async fn ensure_registry(state: State<'_, RegistryState>) -> AppResult<RegistryStatusDto> {
-    Ok(state.inner.ensure_running().await)
+    Ok(state.ensure_running().await)
 }
 
 #[tauri::command]
 pub async fn get_registry_status(state: State<'_, RegistryState>) -> AppResult<RegistryStatusDto> {
-    Ok(state.inner.status().await)
+    Ok(state.status().await)
 }
 
 #[tauri::command]
 pub async fn get_registry_models(state: State<'_, RegistryState>) -> AppResult<RegistryCatalogDto> {
-    state.inner.catalog().await
+    state.catalog().await
 }
