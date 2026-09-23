@@ -858,6 +858,7 @@ async fn chat(
         body["max_tokens"] = json!(8192);
     }
 
+    let endpoint = url.clone();
     let mut req = client
         .post(url)
         .header(CONTENT_TYPE, "application/json")
@@ -1044,21 +1045,131 @@ async fn chat(
 
     if let Some(error) = stream_error.as_deref() {
         if !complete_json {
-            let message = format!(
-                "LLM stream transport failed before a complete JSON response was received: {error} (content-type: '{}')",
-                if content_type.is_empty() { "unknown" } else { content_type.as_str() }
-            );
+            // One safe recovery attempt: ask the same provider for a normal,
+            // non-streaming response. This is useful when only the SSE/body
+            // transport failed; it does not retry successful or complete streams.
+            let mut retry_body = body.clone();
+            retry_body["stream"] = json!(false);
 
-            emit_pipeline(app, stage, "error", message.clone());
-            emit_llm_error(
-                app,
-                &generation_id,
-                stage,
-                settings.llm_model.trim(),
-                Some(full_response.clone()),
-                message.clone(),
-            );
-            return Err(AppError::Llm(message));
+            let mut retry_request = client
+                .post(endpoint.clone())
+                .header(CONTENT_TYPE, "application/json")
+                .header("Accept-Encoding", "identity")
+                .json(&retry_body);
+
+            if !settings.llm_api_key.trim().is_empty() {
+                retry_request = retry_request
+                    .header(AUTHORIZATION, format!("Bearer {}", settings.llm_api_key.trim()));
+            }
+
+            match retry_request.send().await {
+                Ok(retry_response) if retry_response.status().is_success() => {
+                    let retry_content_type = retry_response
+                        .headers()
+                        .get(CONTENT_TYPE)
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+
+                    match retry_response.json::<Value>().await {
+                        Ok(value) => {
+                            if let Some(reasoning) = extract_stream_reasoning(&value) {
+                                reasoning_response.push_str(reasoning);
+                            }
+
+                            if let Some(text) = extract_stream_content(&value) {
+                                full_response = text;
+                                if serde_json::from_str::<Value>(clean_json(&full_response)).is_ok() {
+                                    emit_pipeline(
+                                        app,
+                                        stage,
+                                        "completed",
+                                        format!("Recovered the LLM response with a non-streaming retry after the SSE transport failed: {error}"),
+                                    );
+                                    emit_llm(app, LlmGenerationEvent {
+                                        generation_id,
+                                        stage: stage.into(),
+                                        status: "completed".into(),
+                                        model: settings.llm_model.trim().into(),
+                                        system_prompt: None,
+                                        user_prompt: None,
+                                        thinking_delta: None,
+                                        thinking: Some(reasoning_response),
+                                        delta: None,
+                                        response: Some(full_response.clone()),
+                                        error: None,
+                                    });
+                                    return Ok(full_response);
+                                }
+                            }
+
+                            let message = format!(
+                                "LLM stream transport failed before a complete JSON response was received ({error}); non-streaming retry returned no usable JSON (content-type: '{}')",
+                                if retry_content_type.is_empty() { "unknown" } else { retry_content_type.as_str() }
+                            );
+                            emit_pipeline(app, stage, "error", message.clone());
+                            emit_llm_error(
+                                app,
+                                &generation_id,
+                                stage,
+                                settings.llm_model.trim(),
+                                Some(full_response.clone()),
+                                message.clone(),
+                            );
+                            return Err(AppError::Llm(message));
+                        }
+                        Err(retry_error) => {
+                            let message = format!(
+                                "LLM stream transport failed before a complete JSON response was received ({error}); non-streaming retry failed to decode the response body: {retry_error}"
+                            );
+                            emit_pipeline(app, stage, "error", message.clone());
+                            emit_llm_error(
+                                app,
+                                &generation_id,
+                                stage,
+                                settings.llm_model.trim(),
+                                Some(full_response.clone()),
+                                message.clone(),
+                            );
+                            return Err(AppError::Llm(message));
+                        }
+                    }
+                }
+                Ok(retry_response) => {
+                    let status = retry_response.status();
+                    let body_text = retry_response.text().await.unwrap_or_default();
+                    let message = format!(
+                        "LLM stream transport failed before a complete JSON response was received ({error}); non-streaming retry returned HTTP {}: {}",
+                        status,
+                        body_text.chars().take(300).collect::<String>()
+                    );
+                    emit_pipeline(app, stage, "error", message.clone());
+                    emit_llm_error(
+                        app,
+                        &generation_id,
+                        stage,
+                        settings.llm_model.trim(),
+                        Some(full_response.clone()),
+                        message.clone(),
+                    );
+                    return Err(AppError::Llm(message));
+                }
+                Err(retry_error) => {
+                    let message = format!(
+                        "LLM stream transport failed before a complete JSON response was received ({error}); non-streaming retry request failed: {retry_error}"
+                    );
+                    emit_pipeline(app, stage, "error", message.clone());
+                    emit_llm_error(
+                        app,
+                        &generation_id,
+                        stage,
+                        settings.llm_model.trim(),
+                        Some(full_response.clone()),
+                        message.clone(),
+                    );
+                    return Err(AppError::Llm(message));
+                }
+            }
         }
 
         emit_pipeline(
