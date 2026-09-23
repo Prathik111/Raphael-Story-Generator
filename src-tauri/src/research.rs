@@ -335,16 +335,36 @@ pub async fn check_search_api(settings: &AppSettings) -> AppResult<()> {
     let base = ensure_local_endpoint(settings.web_search_url.trim(), "web search")?;
     let url = base.join("search").map_err(|error| AppError::WebResearch(format!("invalid SearXNG search URL: {error}")))?;
     let client = build_local_client(Duration::from_secs(8))?;
-    let response = client
-        .post(url)
-        .form(&[
-            ("q", "raphael-health-check"),
-            ("format", "json"),
-            ("language", "en"),
-            ("categories", "general"),
-            ("safesearch", "1"),
-        ])
-        .send()
+    let request = |method: &str| async {
+        match method {
+            "POST" => client
+                .post(url.clone())
+                .form(&[
+                    ("q", "OpenAI"),
+                    ("format", "json"),
+                    ("language", "en"),
+                    ("categories", "general"),
+                    ("safesearch", "1"),
+                ])
+                .send()
+                .await,
+            _ => client
+                .get(url.clone())
+                .query(&[
+                    ("q", "OpenAI"),
+                    ("format", "json"),
+                    ("language", "en"),
+                    ("categories", "general"),
+                    ("safesearch", "1"),
+                ])
+                .send()
+                .await,
+        }
+    };
+
+    let response = request("POST")
+        .await
+        .or_else(|_| async { request("GET").await })
         .await
         .map_err(|error| AppError::WebResearch(format!("SearXNG API health check failed: {error}")))?;
     let status = response.status();
@@ -356,7 +376,7 @@ pub async fn check_search_api(settings: &AppSettings) -> AppResult<()> {
         .map_err(|error| AppError::WebResearch(format!("SearXNG health response was not valid search JSON: {error}")))?;
     if parsed.results.is_empty() {
         return Err(AppError::WebResearch(
-            "SearXNG is reachable and returned valid JSON, but the health-check search produced no results; check enabled engines, engine suspension, and Tor connectivity".into(),
+            "SearXNG is reachable and returned valid JSON, but the health-check search for a stable query produced no results; check SearXNG engine availability and Tor connectivity".into(),
         ));
     }
     Ok(())
