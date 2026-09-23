@@ -4,6 +4,7 @@ mod registry;
 mod research;
 mod service_status;
 mod workflow_builder;
+
 use base64::Engine;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use research::ResearchBundle;
@@ -497,7 +498,8 @@ fn load_json<T: for<'de> Deserialize<'de>>(path: &PathBuf) -> AppResult<T> {
     match try_read(path) {
         Ok(value) => Ok(value),
         Err(primary_error) => {
-            let backup = PathBuf::from(format!("{}.bak", path.display()));            if let Ok(value) = try_read(&backup) {
+            let backup = PathBuf::from(format!("{}.bak", path.display()));
+            if let Ok(value) = try_read(&backup) {
                 let _ = fs::copy(&backup, path);
                 return Ok(value);
             }
@@ -658,7 +660,11 @@ async fn chat(
         ]
     });
 
-    let mut req = client.post(url.clone()).header(CONTENT_TYPE, "application/json").json(&body);
+    let mut req = client
+        .post(url)
+        .header(CONTENT_TYPE, "application/json")
+        .json(&body);
+
     if !settings.llm_api_key.trim().is_empty() {
         req = req.header(AUTHORIZATION, format!("Bearer {}", settings.llm_api_key.trim()));
     }
@@ -668,17 +674,14 @@ async fn chat(
         Err(error) => {
             let message = error.to_string();
             emit_pipeline(app, stage, "error", message.clone());
-            emit_llm(app, LlmGenerationEvent {
-                generation_id: generation_id.clone(),
-                stage: stage.into(),
-                status: "error".into(),
-                model: settings.llm_model.trim().into(),
-                system_prompt: None,
-                user_prompt: None,
-                delta: None,
-                response: None,
-                error: Some(message.clone()),
-            });
+            emit_llm_error(
+                app,
+                &generation_id,
+                stage,
+                settings.llm_model.trim(),
+                None,
+                message.clone(),
+            );
             return Err(AppError::Llm(message));
         }
     };
@@ -692,25 +695,27 @@ async fn chat(
         .to_ascii_lowercase();
 
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_else(|_| "request rejected".into());
-        let value: Value = serde_json::from_str(&body).unwrap_or_else(|_| json!({"error": body}));
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "request rejected".into());
+        let value: Value = serde_json::from_str(&body)
+            .unwrap_or_else(|_| json!({"error": body}));
         let message = value
             .get("error")
             .and_then(Value::as_str)
             .unwrap_or("request rejected")
             .to_string();
+
         emit_pipeline(app, stage, "error", message.clone());
-        emit_llm(app, LlmGenerationEvent {
-            generation_id: generation_id.clone(),
-            stage: stage.into(),
-            status: "error".into(),
-            model: settings.llm_model.trim().into(),
-            system_prompt: None,
-            user_prompt: None,
-            delta: None,
-            response: None,
-            error: Some(message.clone()),
-        });
+        emit_llm_error(
+            app,
+            &generation_id,
+            stage,
+            settings.llm_model.trim(),
+            None,
+            message.clone(),
+        );
         return Err(AppError::Llm(message));
     }
 
@@ -718,10 +723,15 @@ async fn chat(
         value
             .get("choices")
             .and_then(|v| v.get(0))
-            .and_then(|v| {
-                v.get("delta")
-                    .and_then(|d| d.get("content"))
-                    .or_else(|| v.get("message").and_then(|m| m.get("content")))
+            .and_then(|choice| {
+                choice
+                    .get("delta")
+                    .and_then(|delta| delta.get("content"))
+                    .or_else(|| {
+                        choice
+                            .get("message")
+                            .and_then(|message| message.get("content"))
+                    })
             })
             .and_then(Value::as_str)
             .filter(|text| !text.is_empty())
@@ -735,6 +745,7 @@ async fn chat(
 
     let mut consume_payload = |payload: &str| {
         let data = payload.trim();
+
         if data.is_empty() || data == "[DONE]" {
             return;
         }
@@ -746,6 +757,7 @@ async fn chat(
         if let Some(text) = extract_content(&value) {
             parsed_any = true;
             full_response.push_str(text);
+
             emit_llm(app, LlmGenerationEvent {
                 generation_id: token_generation_id.clone(),
                 stage: stage.into(),
@@ -760,23 +772,23 @@ async fn chat(
         }
     };
 
+    // The request explicitly asks for streaming. Do not trust Content-Type alone:
+    // several OpenAI-compatible servers send SSE/NDJSON with a generic JSON type.
     let mut stream = response.bytes_stream();
+
     while let Some(chunk) = stream.next().await {
         let chunk = match chunk {
             Ok(chunk) => chunk,
             Err(error) => {
                 let message = error.to_string();
-                emit_llm(app, LlmGenerationEvent {
-                    generation_id: generation_id.clone(),
-                    stage: stage.into(),
-                    status: "error".into(),
-                    model: settings.llm_model.trim().into(),
-                    system_prompt: None,
-                    user_prompt: None,
-                    delta: None,
-                    response: Some(full_response.clone()),
-                    error: Some(message.clone()),
-                });
+                emit_llm_error(
+                    app,
+                    &generation_id,
+                    stage,
+                    settings.llm_model.trim(),
+                    Some(full_response.clone()),
+                    message.clone(),
+                );
                 return Err(AppError::Llm(message));
             }
         };
@@ -792,12 +804,13 @@ async fn chat(
                 saw_sse = true;
                 consume_payload(data);
             } else if line.starts_with('{') {
-                // Support providers that return NDJSON despite advertising a JSON response.
+                // Support NDJSON providers and newline-delimited JSON bodies.
                 consume_payload(line);
             }
         }
     }
 
+    // Some providers send one complete JSON object without a trailing newline.
     if !buffer.is_empty() {
         let leftover = String::from_utf8_lossy(&buffer);
         let leftover = leftover.trim();
@@ -811,18 +824,20 @@ async fn chat(
     }
 
     if !parsed_any {
-        let kind = if saw_sse {
+        let format = if saw_sse {
             "SSE"
         } else if content_type.contains("ndjson") {
             "NDJSON"
         } else {
             "JSON/stream"
         };
+
         let message = format!(
-            "LLM returned a {} response, but no choices[0].message.content or choices[0].delta.content was found (content-type: '{}'). Check the provider endpoint and model response format.",
-            kind,
+            "LLM returned a {} response, but no choices[0].message.content or choices[0].delta.content was found (content-type: '{}'). Check the configured LLM endpoint and model response format.",
+            format,
             if content_type.is_empty() { "unknown" } else { content_type.as_str() }
         );
+
         emit_pipeline(app, stage, "error", message.clone());
         emit_llm_error(
             app,
@@ -997,7 +1012,8 @@ fn validate_visual_setup(
     Ok(())
 }
 
-fn validate_settings(settings: &AppSettings) -> AppResult<()> {    if settings.llm_model.trim().is_empty() {
+fn validate_settings(settings: &AppSettings) -> AppResult<()> {
+    if settings.llm_model.trim().is_empty() {
         return Err(AppError::Llm("LLM model cannot be empty".into()));
     }
     if !settings.temperature.is_finite() || !(0.0..=2.0).contains(&settings.temperature) {
@@ -1496,7 +1512,8 @@ Return:
                     character_name
                 )));
             }
-        }    }
+        }
+    }
     let scenes = parsed.scenes.into_iter().enumerate().map(|(index, scene)| Scene {
         id: format!("{}-scene-{:03}", chapter.number, index + 1), order: index + 1, description: scene.description,
         location: scene.location, time: scene.time, characters: scene.characters, action: scene.action,
@@ -1996,6 +2013,7 @@ fn model_manager_app_data_candidates() -> Vec<PathBuf> {
     if let Some(value) = env::var_os("RAPHAEL_MODEL_MANAGER_APP_DATA_DIR") {
         candidates.push(PathBuf::from(value));
     }
+
     if let Some(value) = env::var_os("APPDATA") {
         candidates.push(PathBuf::from(value).join("com.raphael.modelmanager"));
     }
