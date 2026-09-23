@@ -507,6 +507,7 @@ type GenerationTrace = {
   model: string;
   system_prompt: string;
   user_prompt: string;
+  thinking: string;
   response: string;
   error: string | null;
 };
@@ -552,6 +553,10 @@ function GenerationMonitor({
             <div className="trace-block">
               <div className="section-head">USER PROMPT</div>
               <pre className="trace-box">{generation.user_prompt}</pre>
+            </div>
+            <div className="trace-block">
+              <div className="section-head">MODEL THINKING {(generation.status === 'started' || generation.status === 'token') ? '· STREAMING' : ''}</div>
+              <pre className="trace-box thinking">{generation.thinking || '(no provider thinking stream)'}</pre>
             </div>
             <div className="trace-block">
               <div className="section-head">LLM RESPONSE {(generation.status === 'started' || generation.status === 'token') ? '· STREAMING' : ''}</div>
@@ -697,6 +702,7 @@ export default function App() {
             model: event.model,
             system_prompt: event.system_prompt || '',
             user_prompt: event.user_prompt || '',
+            thinking: event.thinking || '',
             response: '',
             error: null,
           };
@@ -709,6 +715,7 @@ export default function App() {
           return {
             ...item,
             status: event.status,
+            thinking: event.thinking ?? (event.thinking_delta ? item.thinking + event.thinking_delta : item.thinking),
             response: event.response ?? (event.delta ? item.response + event.delta : item.response),
             error: event.error || item.error,
           };
