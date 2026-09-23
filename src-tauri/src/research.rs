@@ -119,6 +119,14 @@ fn add_research_subject(subjects: &mut Vec<String>, raw: &str) {
         .trim_matches(|c: char| matches!(c, '"' | '“' | '”' | '\''))
         .trim()
         .to_string();
+
+    for prefix in ["a ", "an ", "the "] {
+        if subject.to_ascii_lowercase().starts_with(prefix) {
+            subject = subject[prefix.len()..].trim().to_string();
+            break;
+        }
+    }
+
     if subject.is_empty() || is_generic_research_subject(&subject) {
         return;
     }
