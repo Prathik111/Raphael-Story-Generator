@@ -501,7 +501,7 @@ function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPromp
 }
 
 function formatTraceText(value: string, prettyJson: boolean = false): string {
-  const normalized = value.replace(/\\r\\n/g, '\\n').replace(/\\r/g, '\\n').trim();
+  const normalized = value.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
 
   if (!normalized) return '';
 
@@ -509,8 +509,6 @@ function formatTraceText(value: string, prettyJson: boolean = false): string {
     try {
       return JSON.stringify(JSON.parse(normalized), null, 2);
     } catch {
-      // While streaming, the JSON may be incomplete. Fall through to the
-      // lightweight formatter so indentation still improves progressively.
       let output = '';
       let indent = 0;
       let inString = false;
@@ -529,7 +527,7 @@ function formatTraceText(value: string, prettyJson: boolean = false): string {
           continue;
         }
 
-        if (char === '"' ) {
+        if (char === '"') {
           inString = !inString;
           output += char;
           continue;
@@ -541,14 +539,14 @@ function formatTraceText(value: string, prettyJson: boolean = false): string {
         }
 
         if (char === '{' || char === '[') {
-          output = output.trimEnd() + char + '\\n';
+          output = output.trimEnd() + char + '\n';
           indent += 1;
           output += '  '.repeat(indent);
         } else if (char === '}' || char === ']') {
           indent = Math.max(0, indent - 1);
-          output = output.trimEnd() + '\\n' + '  '.repeat(indent) + char;
+          output = output.trimEnd() + '\n' + '  '.repeat(indent) + char;
         } else if (char === ',') {
-          output = output.trimEnd() + ',\\n' + '  '.repeat(indent);
+          output = output.trimEnd() + ',\n' + '  '.repeat(indent);
         } else if (char === ':') {
           output = output.trimEnd() + ': ';
         } else {
@@ -556,16 +554,17 @@ function formatTraceText(value: string, prettyJson: boolean = false): string {
         }
       }
 
-      return output.replace(/\\n{3,}/g, '\\n\\n').trim();
+      return output.replace(/\n{3,}/g, '\n\n').trim();
     }
   }
 
   return normalized
-    .replace(/\\n[ \\t]+/g, '\\n')
-    .replace(/[ \\t]{2,}/g, ' ')
-    .replace(/\\n{3,}/g, '\\n\\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
+
 
 type GenerationTrace = {
   generation_id: string;
