@@ -85,7 +85,17 @@ fn add_research_subject(subjects: &mut Vec<String>, raw: &str) {
         .trim_matches(|c: char| matches!(c, ',' | ':' | ';' | '-' | '"' | '“' | '”' | '\'' | ' ' | '\t' | '\r' | '\n'))
         .to_string();
 
-    let lower = subject.to_ascii_lowercase();
+    let mut lower = subject.to_ascii_lowercase();
+
+    // Prefer the actual name in phrases such as "a boy named Alex".
+    for marker in [" named ", " called "] {
+        if let Some(index) = lower.find(marker) {
+            subject = subject[index + marker.len()..].trim().to_string();
+            lower = subject.to_ascii_lowercase();
+            break;
+        }
+    }
+
     let clause_stops = [
         " where ",
         " while ",
@@ -95,6 +105,7 @@ fn add_research_subject(subjects: &mut Vec<String>, raw: &str) {
         " with a ",
         " with an ",
         " with the ",
+        " with ",
         " and then ",
         " and write ",
         " and make ",
@@ -120,11 +131,30 @@ fn add_research_subject(subjects: &mut Vec<String>, raw: &str) {
         .trim()
         .to_string();
 
-    for prefix in ["a ", "an ", "the "] {
-        if subject.to_ascii_lowercase().starts_with(prefix) {
-            subject = subject[prefix.len()..].trim().to_string();
+    // Remove generic article prefixes.
+    loop {
+        let lower = subject.to_ascii_lowercase();
+        let Some(prefix) = ["a ", "an ", "the "]
+            .iter()
+            .find(|prefix| lower.starts_with(**prefix))
+        else {
             break;
-        }
+        };
+        subject = subject[prefix.len()..].trim().to_string();
+    }
+
+    // A trailing "story/fanfic" is an instruction about the requested output,
+    // not part of the research subject.
+    loop {
+        let lower = subject.to_ascii_lowercase();
+        let Some(suffix) = [" fanfiction", " fanfic", " story"]
+            .iter()
+            .find(|suffix| lower.ends_with(**suffix))
+        else {
+            break;
+        };
+        subject.truncate(subject.len().saturating_sub(suffix.len()));
+        subject = subject.trim().to_string();
     }
 
     if subject.is_empty() || is_generic_research_subject(&subject) {
@@ -132,7 +162,9 @@ fn add_research_subject(subjects: &mut Vec<String>, raw: &str) {
     }
 
     if subject.split_whitespace().count() <= 12
-        && !subjects.iter().any(|existing| existing.eq_ignore_ascii_case(&subject))
+        && !subjects
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(&subject))
     {
         subjects.push(subject);
     }
@@ -143,26 +175,28 @@ fn is_generic_research_subject(subject: &str) -> bool {
 
     if matches!(
         normalized.as_str(),
-        "a dragon"
-            | "a hero"
-            | "a character"
-            | "a person"
-            | "a boy"
-            | "a girl"
-            | "a student"
-            | "a warrior"
-            | "a wizard"
-            | "a king"
-            | "a queen"
-            | "a villain"
-            | "a new character"
-            | "a story"
-            | "a random story"
-            | "an original story"
-            | "an original"
-            | "a random"
-            | "an anime story"
-            | "a manga story"
+        "dragon"
+            | "hero"
+            | "character"
+            | "person"
+            | "boy"
+            | "girl"
+            | "student"
+            | "warrior"
+            | "wizard"
+            | "king"
+            | "queen"
+            | "villain"
+            | "new character"
+            | "story"
+            | "random story"
+            | "random"
+            | "original"
+            | "original story"
+            | "anime story"
+            | "manga story"
+            | "anime"
+            | "manga"
             | "characters"
             | "someone"
             | "something"
@@ -172,28 +206,21 @@ fn is_generic_research_subject(subject: &str) -> bool {
     }
 
     let generic_role_words = [
-        "dragon",
-        "hero",
-        "villain",
-        "character",
-        "person",
-        "boy",
-        "girl",
-        "student",
-        "warrior",
-        "wizard",
-        "king",
-        "queen",
-        "child",
-        "kid",
-        "man",
-        "woman",
+        "dragon", "hero", "villain", "character", "person", "boy", "girl",
+        "student", "warrior", "wizard", "king", "queen", "child", "kid",
+        "man", "woman",
     ];
 
-    (normalized.starts_with("a ") || normalized.starts_with("an "))
-        && generic_role_words
+    let words = subject.split_whitespace().collect::<Vec<_>>();
+    let has_proper_name = words.iter().any(|word| {
+        word.chars().next().is_some_and(|first| first.is_uppercase())
+    });
+
+    !has_proper_name
+        && words.len() <= 4
+        && words
             .iter()
-            .any(|word| normalized.split_whitespace().any(|part| part == *word))
+            .any(|word| generic_role_words.contains(&word.to_ascii_lowercase().as_str()))
 }
 
 fn add_named_runs(subjects: &mut Vec<String>, prompt: &str) {
@@ -1460,6 +1487,18 @@ pub async fn check_private_search(settings: &AppSettings) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn research_query_normalizes_subject_phrases() {
+        assert_eq!(
+            research_query_from_prompt("Surprise me with a Naruto story"),
+            Some("Naruto".into())
+        );
+        assert_eq!(
+            research_query_from_prompt("Write an original story about a brave boy named Alex"),
+            Some("Alex".into())
+        );
+    }
 
     #[test]
     fn research_query_skips_unqualified_random_story() {
