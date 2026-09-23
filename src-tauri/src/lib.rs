@@ -1172,12 +1172,6 @@ async fn chat(
             }
         }
 
-        emit_pipeline(
-            app,
-            stage,
-            "completed",
-            format!("LLM stream ended with a transport error after a complete response was received; preserving the complete response: {error}"),
-        );
     }
 
     if !parsed_any {
