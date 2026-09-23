@@ -2388,6 +2388,18 @@ mod tests {
     }
 
     #[test]
+    fn clean_json_ignores_model_prose_after_valid_json() {
+        let value = clean_json("{\"ok\":true} I should double-check the schema before continuing.");
+        assert_eq!(value, "{\"ok\":true}");
+    }
+
+    #[test]
+    fn clean_json_ignores_braces_inside_json_strings() {
+        let value = clean_json("Wrapper: {\"text\":\"a { b } c\",\"ok\":true} trailing prose");
+        assert_eq!(value, "{\"text\":\"a { b } c\",\"ok\":true}");
+    }
+
+    #[test]
     fn normalize_name_is_stable_for_matching() {
         assert_eq!(normalize_name("  Alice  "), "alice");
     }
