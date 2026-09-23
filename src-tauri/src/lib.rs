@@ -2429,16 +2429,16 @@ mod tests {
 
     #[test]
     fn stream_content_parser_handles_openai_delta_and_ollama_message_shapes() {
-        let openai = json!({"choices":[{"delta":{"content":"{\\"title\\":\\"X\\"}"}}]});
+        let openai = json!({"choices":[{"delta":{"content":"{\"title\":\"X\"}"}}]});
         assert_eq!(
             extract_stream_content(&openai).as_deref(),
-            Some("{\\"title\\":\\"X\\"}")
+            Some("{\"title\":\"X\"}")
         );
 
-        let ollama = json!({"message":{"content":"{\\"title\\":\\"X\\"}"}});
+        let ollama = json!({"message":{"content":"{\"title\":\"X\"}"}});
         assert_eq!(
             extract_stream_content(&ollama).as_deref(),
-            Some("{\\"title\\":\\"X\\"}")
+            Some("{\"title\":\"X\"}")
         );
     }
 
