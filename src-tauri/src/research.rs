@@ -2,6 +2,7 @@ use crate::{chat, emit_pipeline, AppError, AppResult, AppSettings};
 use futures_util::StreamExt;
 use reqwest::{Client, Proxy, StatusCode};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::time::Duration;
