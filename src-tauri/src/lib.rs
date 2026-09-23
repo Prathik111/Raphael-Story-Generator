@@ -671,6 +671,8 @@ async fn chat(
     let lower_base = base.to_ascii_lowercase();
     if lower_base.contains("11434") || lower_base.contains("ollama") {
         body["reasoning_effort"] = json!("medium");
+        body["response_format"] = json!({"type": "json_object"});
+        body["max_tokens"] = json!(8192);
     }
 
     let mut req = client
