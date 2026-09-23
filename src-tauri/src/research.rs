@@ -362,11 +362,16 @@ pub async fn check_search_api(settings: &AppSettings) -> AppResult<()> {
         }
     };
 
-    let response = request("POST")
-        .await
-        .or_else(|_| async { request("GET").await })
-        .await
-        .map_err(|error| AppError::WebResearch(format!("SearXNG API health check failed: {error}")))?;
+    let response = match request("POST").await {
+        Ok(response) => response,
+        Err(post_error) => request("GET")
+            .await
+            .map_err(|get_error| {
+                AppError::WebResearch(format!(
+                    "SearXNG API health check failed for POST ({post_error}) and GET ({get_error})"
+                ))
+            })?,
+    };
     let status = response.status();
     let body = response.text().await.map_err(|error| AppError::WebResearch(format!("failed to read SearXNG health response: {error}")))?;
     if !status.is_success() {
