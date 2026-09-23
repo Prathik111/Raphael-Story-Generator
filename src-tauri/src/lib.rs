@@ -806,6 +806,9 @@ async fn chat(
                             })
                     })
             })
+            .or_else(|| value.get("reasoning").and_then(Value::as_str))
+            .or_else(|| value.get("reasoning_content").and_then(Value::as_str))
+            .or_else(|| value.get("thinking").and_then(Value::as_str))
             .filter(|text| !text.is_empty())
     }
 
@@ -1556,20 +1559,25 @@ Text: {}", c.title, c.summary, c.events, c.text)).unwrap_or_default();
     let bible = serde_json::to_string(&story.bible).map_err(|e| AppError::ModelResponse(e.to_string()))?;
     let directive = if user_prompt.trim().is_empty() { "(none — continue naturally)" } else { user_prompt.trim() };
 
-    if settings.web_research_enabled && !user_prompt.trim().is_empty() {
-        emit_pipeline(store.app(), "web_gateway", "started", "Ensuring the private web research gateway is running");
-        privacy_gateway::ensure_started_with_settings(store.app(), &settings).await?;
-        emit_pipeline(store.app(), "web_gateway", "completed", "Private web research gateway is ready");
-        emit_pipeline(store.app(), "web_research", "started", format!("Researching the Chapter {} directive privately", next_number));
-        match research::research_web(store.app(), &settings, &format!("{}: {}", story.title, user_prompt.trim())).await {
-            Ok(bundle) => {
-                research::merge_into(&mut story.research, bundle);
-                emit_pipeline(store.app(), "web_research", "completed", format!("Added new source-backed research for Chapter {}", next_number));
+    let directive_research_query = research::research_query_from_prompt(user_prompt.as_str());
+    if settings.web_research_enabled {
+        if let Some(query) = directive_research_query.as_deref() {
+            emit_pipeline(store.app(), "web_research", "started", format!("Research requested for Chapter {} subject(s): {}", next_number, query));
+            emit_pipeline(store.app(), "web_gateway", "started", "Ensuring the private web research gateway is running");
+            privacy_gateway::ensure_started_with_settings(store.app(), &settings).await?;
+            emit_pipeline(store.app(), "web_gateway", "completed", "Private web research gateway is ready");
+            match research::research_web(store.app(), &settings, query).await {
+                Ok(bundle) => {
+                    research::merge_into(&mut story.research, bundle);
+                    emit_pipeline(store.app(), "web_research", "completed", format!("Added new source-backed research for Chapter {}", next_number));
+                }
+                Err(error) => {
+                    emit_pipeline(store.app(), "web_research", "error", error.to_string());
+                    return Err(error);
+                }
             }
-            Err(error) => {
-                emit_pipeline(store.app(), "web_research", "error", error.to_string());
-                return Err(error);
-            }
+        } else {
+            emit_pipeline(store.app(), "web_research", "skipped", format!("No explicit research subject was found in the Chapter {} directive; continuing without web research", next_number));
         }
     }
 
@@ -2394,6 +2402,21 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    #[test]
+    fn research_subject_extractor_skips_random_story_requests() {
+        assert!(research::research_query_from_prompt("Give me a random story").is_none());
+        assert!(research::research_query_from_prompt("Surprise me with an original story").is_none());
+    }
+
+    #[test]
+    fn research_subject_extractor_keeps_explicit_subjects_only() {
+        assert_eq!(
+            research::research_query_from_prompt("Write a story about Naruto Uzumaki"),
+            Some("Naruto Uzumaki".into())
+        );
+    }
 
     #[test]
     fn clean_json_extracts_json_from_wrapped_output() {
