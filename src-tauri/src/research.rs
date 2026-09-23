@@ -240,19 +240,6 @@ pub fn research_query_from_prompt(prompt: &str) -> Option<String> {
         }
     }
 
-    let external_cues = [
-        "based on",
-        "inspired by",
-        "fanfic",
-        "fanfiction",
-        "characters from",
-        "character from",
-        "set in the world of",
-        "from the world of",
-        "featuring",
-        "starring",
-    ];
-    let has_external_cue = external_cues.iter().any(|cue| lower.contains(cue));
     add_named_runs(&mut subjects, prompt);
 
     let story_pattern = regex::Regex::new(
@@ -1473,10 +1460,10 @@ mod tests {
     }
 
     #[test]
-    fn research_query_ignores_generic_original_character_descriptions() {
+    fn research_query_extracts_explicitly_named_characters() {
         assert_eq!(
             research_query_from_prompt("Write an original story about a brave boy named Alex"),
-            None
+            Some("Alex".into())
         );
     }
 
