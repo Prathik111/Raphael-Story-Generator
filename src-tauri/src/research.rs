@@ -59,6 +59,8 @@ pub struct ResearchBundle {
 #[serde(default)]
 struct SearxResponse {
     results: Vec<SearxResult>,
+    #[serde(default)]
+    unresponsive_engines: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -331,6 +333,33 @@ fn validate_source_url(raw: &str) -> AppResult<Url> {
     Ok(url)
 }
 
+pub async fn check_search_gateway(settings: &AppSettings) -> AppResult<()> {
+    let base = ensure_local_endpoint(settings.web_search_url.trim(), "web search")?;
+    let url = base
+        .join("config")
+        .map_err(|error| AppError::WebResearch(format!("invalid SearXNG config URL: {error}")))?;
+    let client = build_local_client(Duration::from_secs(5))?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| AppError::WebResearch(format!("SearXNG gateway is unreachable: {error}")))?;
+
+    if !response.status().is_success() {
+        return Err(AppError::WebResearch(format!(
+            "SearXNG gateway returned HTTP {}",
+            response.status()
+        )));
+    }
+
+    let body = response
+        .text()
+        .await
+        .map_err(|error| AppError::WebResearch(format!("failed to read SearXNG config response: {error}")))?;
+    serde_json::from_str::<Value>(&body)
+        .map_err(|error| AppError::WebResearch(format!("SearXNG config response was not valid JSON: {error}")))?;
+    Ok(())
+}
 pub async fn check_search_api(settings: &AppSettings) -> AppResult<()> {
     let base = ensure_local_endpoint(settings.web_search_url.trim(), "web search")?;
     let url = base.join("search").map_err(|error| AppError::WebResearch(format!("invalid SearXNG search URL: {error}")))?;
@@ -384,9 +413,20 @@ pub async fn check_search_api(settings: &AppSettings) -> AppResult<()> {
     let parsed = serde_json::from_str::<SearxResponse>(&body)
         .map_err(|error| AppError::WebResearch(format!("SearXNG health response was not valid search JSON: {error}")))?;
     if parsed.results.is_empty() {
-        return Err(AppError::WebResearch(
-            "SearXNG is reachable and returned valid JSON, but the health-check search for a stable query produced no results; check SearXNG engine availability and Tor connectivity".into(),
-        ));
+        let engines = parsed
+            .unresponsive_engines
+            .iter()
+            .filter_map(|engine| engine.first())
+            .cloned()
+            .collect::<Vec<_>>();
+        let detail = if engines.is_empty() {
+            "no usable engine results were reported".to_string()
+        } else {
+            format!("unresponsive engines: {}", engines.join(", "))
+        };
+        return Err(AppError::WebResearch(format!(
+            "SearXNG search API is reachable, but the health-check search produced no results ({detail})"
+        )));
     }
     Ok(())
 }
@@ -468,11 +508,25 @@ async fn search_once(
         )));
     }
 
-    response
+    let parsed = response
         .json::<SearxResponse>()
         .await
-        .map(|result| result.results)
-        .map_err(|error| AppError::WebResearch(format!("invalid SearXNG JSON response: {error}")))
+        .map_err(|error| AppError::WebResearch(format!("invalid SearXNG JSON response: {error}")))?;
+
+    if parsed.results.is_empty() && !parsed.unresponsive_engines.is_empty() {
+        let engines = parsed
+            .unresponsive_engines
+            .iter()
+            .filter_map(|engine| engine.first())
+            .cloned()
+            .collect::<Vec<_>>();
+        return Err(AppError::WebResearch(format!(
+            "SearXNG returned no results; unresponsive engines: {}",
+            engines.join(", ")
+        )));
+    }
+
+    Ok(parsed.results)
 }
 
 #[derive(Clone, Copy)]
