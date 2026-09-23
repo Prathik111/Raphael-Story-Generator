@@ -106,8 +106,8 @@ pub fn research_query_from_prompt(prompt: &str) -> Option<String> {
 
     let mut subjects = Vec::<String>::new();
     let patterns = [
-        r"(?i)\b(?:based on|inspired by|featuring|starring|with characters from|characters from|set in the world of|from the world of)\s+([^.!?\n]+)",
-        r"(?i)\b(?:about|using)\s+([A-Za-z0-9][^.!?\n]+?)\s+(?:story|fanfic|fanfiction|character|characters|series|anime|manga|game)\b",
+        r"(?i)\b(?:based on|inspired by|featuring|starring|with characters from|characters from|set in the world of|from the world of|about|using)\s+([^.!?\n]+)",
+        r"(?i)\b([A-Z][A-Za-z0-9_-]{1,30}(?:\s+[A-Z][A-Za-z0-9_-]{1,30}){0,4})\s+(?:story|fanfic|fanfiction)\b",
         r"(?i)^\s*([A-Z][A-Za-z0-9_-]{1,30}(?:\s+[A-Z][A-Za-z0-9_-]{1,30}){0,4})\s+(?:story|fanfic|fanfiction)\b",
     ];
 
