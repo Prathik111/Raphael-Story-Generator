@@ -2636,7 +2636,10 @@ mod tests {
         }"#;
 
         let parsed = parse_story_architect_response(raw).expect("object-valued string field should normalize");
-        assert_eq!(parsed.characters[0].appearance, r#"{"height":"tall","hair":"black"}"#);
+        let appearance: Value =
+            serde_json::from_str(&parsed.characters[0].appearance).expect("appearance should contain JSON text");
+        assert_eq!(appearance["height"], "tall");
+        assert_eq!(appearance["hair"], "black");
     }
 
     #[test]
