@@ -563,14 +563,6 @@ fn source_context(sources: &[ResearchSource], max_chars: usize) -> String {
     output
 }
 
-fn evidence_tokens(value: &str) -> Vec<String> {
-    value
-        .to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|token| token.len() >= 3)
-        .map(str::to_string)
-        .collect()
-}
 
 fn normalized_evidence_text(value: &str) -> String {
     value
