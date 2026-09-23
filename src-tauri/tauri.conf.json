@@ -26,8 +26,12 @@
   "bundle": {
     "active": true,
     "targets": ["msi", "nsis"],
+    "icon": ["icons/icon.ico"],
     "category": "Utility",
     "shortDescription": "AI story and manga scene generator",
-    "longDescription": "Local-first story generation with persistent canon, chapter continuation, scene extraction and ComfyUI-ready image prompts."
+    "longDescription": "Local-first story generation with persistent canon, private web research, chapter continuation, scene extraction and ComfyUI-ready image prompts.",
+    "resources": {
+      "../privacy-search/": "privacy-search/"
+    }
   }
 }

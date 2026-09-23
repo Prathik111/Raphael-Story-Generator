@@ -43,6 +43,23 @@ pub struct RegistryModelDto {
     pub revision: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct RegistryModelArtifact {
+    pub id: String,
+    pub file_name: String,
+    pub activation_prompts: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RegistryLoraCandidate {
+    pub id: String,
+    pub name: String,
+    pub model_type: String,
+    pub description: Option<String>,
+    pub base_model: Option<String>,
+    pub tags: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RegistryCatalogDto {
     pub checkpoints: Vec<RegistryModelDto>,
@@ -60,6 +77,7 @@ struct RegistryInner {
     base_url: String,
     token_path: PathBuf,
     executable: Option<PathBuf>,
+    #[allow(dead_code)]
     source_manifest: Option<PathBuf>,
     http: reqwest::Client,
     starting: AtomicBool,
@@ -112,7 +130,7 @@ impl RegistryState {
         self.inner.last_error.read().ok().and_then(|value| value.clone())
     }
 
-    async fn status(&self) -> RegistryStatusDto {
+    pub async fn status(&self) -> RegistryStatusDto {
         let status = if self.inner.starting.load(Ordering::Acquire) {
             RegistryStatus::Starting
         } else if self.health().await {
@@ -219,7 +237,7 @@ impl RegistryState {
         )
     }
 
-    async fn client(&self) -> AppResult<RegistryClient> {
+    pub async fn client(&self) -> AppResult<RegistryClient> {
         if !self.health().await {
             let status = self.ensure_running().await;
             if !matches!(status.status, RegistryStatus::On) {
@@ -259,6 +277,91 @@ impl RegistryState {
             checkpoints: checkpoint_result.items.into_iter().map(RegistryModelDto::from_model).collect(),
             lora_total: lora_result.total,
             loras: lora_result.items.into_iter().map(RegistryModelDto::from_model).collect(),
+        })
+    }
+}
+
+impl RegistryState {
+    pub async fn compatible_loras(&self, checkpoint_id: &str) -> AppResult<Vec<RegistryLoraCandidate>> {
+        let client = self.client().await?;
+        let models = client
+            .compatible(checkpoint_id, Some(ModelType::Lora))
+            .await
+            .map_err(|error| AppError::Registry(format!("failed to load compatible LoRAs: {error}")))?;
+
+        let mut candidates = Vec::with_capacity(models.len());
+        for model in models {
+            let tags = client.tags(&model.id)
+                .await
+                .map_err(|error| AppError::Registry(format!("failed to load tags for {}: {error}", model.name)))?;
+
+            candidates.push(RegistryLoraCandidate {
+                id: model.id,
+                name: model.name,
+                model_type: model.model_type.to_string(),
+                description: model.description.map(|value| value.chars().take(600).collect()),
+                base_model: model.base_model,
+                tags,
+            });
+        }
+
+        Ok(candidates)
+    }
+
+    pub async fn model_artifact(&self, model_id: &str) -> AppResult<RegistryModelArtifact> {
+        let client = self.client().await?;
+        let model = client
+            .get(model_id)
+            .await
+            .map_err(|error| AppError::Registry(format!("failed to load model {model_id}: {error}")))?;
+        let files = client
+            .files(model_id)
+            .await
+            .map_err(|error| AppError::Registry(format!("failed to load files for {}: {error}", model.name)))?;
+
+        let versions = client
+            .versions(model_id)
+            .await
+            .map_err(|error| AppError::Registry(format!("failed to load versions for {}: {error}", model.name)))?;
+        let latest_version = versions
+            .into_iter()
+            .max_by_key(|version| version.updated_at);
+
+        let file = if let Some(version) = latest_version.as_ref() {
+            files
+                .iter()
+                .filter(|file| {
+                    matches!(file.status, registry_core::FileStatus::Available)
+                        && file.version_id.as_deref() == Some(version.id.as_str())
+                })
+                .max_by_key(|file| file.updated_at)
+                .cloned()
+                .or_else(|| {
+                    files
+                        .iter()
+                        .filter(|file| {
+                            matches!(file.status, registry_core::FileStatus::Available)
+                                && file.version_id.is_none()
+                        })
+                        .max_by_key(|file| file.updated_at)
+                        .cloned()
+                })
+        } else {
+            files
+                .into_iter()
+                .filter(|file| matches!(file.status, registry_core::FileStatus::Available))
+                .max_by_key(|file| file.updated_at)
+        }
+        .ok_or_else(|| AppError::Registry(format!("model '{}' has no available file matching its latest version", model.name)))?;
+
+        let activation_prompts = latest_version
+            .map(|version| version.activation_prompts)
+            .unwrap_or_default();
+
+        Ok(RegistryModelArtifact {
+            id: model.id,
+            file_name: file.filename,
+            activation_prompts,
         })
     }
 }
@@ -352,15 +455,15 @@ fn spawn_hidden(mut command: std::process::Command) -> std::io::Result<std::proc
 
 #[tauri::command]
 pub async fn ensure_registry(state: State<'_, RegistryState>) -> AppResult<RegistryStatusDto> {
-    Ok(state.inner.ensure_running().await)
+    Ok(state.ensure_running().await)
 }
 
 #[tauri::command]
 pub async fn get_registry_status(state: State<'_, RegistryState>) -> AppResult<RegistryStatusDto> {
-    Ok(state.inner.status().await)
+    Ok(state.status().await)
 }
 
 #[tauri::command]
 pub async fn get_registry_models(state: State<'_, RegistryState>) -> AppResult<RegistryCatalogDto> {
-    state.inner.catalog().await
+    state.catalog().await
 }
