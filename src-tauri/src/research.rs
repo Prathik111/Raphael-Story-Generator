@@ -76,6 +76,99 @@ struct ExtractedResearch {
     facts: Vec<ResearchFact>,
 }
 
+fn repair_model_json(raw: &str) -> String {
+    let mut value = crate::clean_json(raw).trim().to_string();
+
+    if value.starts_with("```") {
+        value = value
+            .trim_start_matches("```json")
+            .trim_start_matches("```JSON")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim()
+            .to_string();
+    }
+
+    let chars: Vec<char> = value.chars().collect();
+    let mut output = String::with_capacity(value.len() + 32);
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut i = 0;
+
+    while i < chars.len() {
+        let ch = chars[i];
+
+        if escaped {
+            output.push(ch);
+            escaped = false;
+            i += 1;
+            continue;
+        }
+
+        if in_string {
+            match ch {
+                '\\' => {
+                    output.push(ch);
+                    if let Some(next) = chars.get(i + 1) {
+                        if matches!(next, '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'u') {
+                            escaped = true;
+                        } else {
+                            output.push('\\');
+                        }
+                    }
+                }
+                '"' => {
+                    let mut next = i + 1;
+                    while next < chars.len() && chars[next].is_whitespace() {
+                        next += 1;
+                    }
+                    let closes_string = next >= chars.len()
+                        || matches!(chars[next], ',' | '}' | ']' | ':');
+                    if closes_string {
+                        in_string = false;
+                        output.push('"');
+                    } else {
+                        output.push_str("\\\"");
+                    }
+                }
+                '\n' => output.push_str("\\n"),
+                '\r' => output.push_str("\\r"),
+                '\t' => output.push_str("\\t"),
+                c if c.is_control() => output.push_str(&format!("\\u{:04x}", c as u32)),
+                _ => output.push(ch),
+            }
+        } else {
+            match ch {
+                '"' => {
+                    in_string = true;
+                    output.push(ch);
+                }
+                ',' => {
+                    let mut next = i + 1;
+                    while next < chars.len() && chars[next].is_whitespace() {
+                        next += 1;
+                    }
+                    if !matches!(chars.get(next), Some('}') | Some(']')) {
+                        output.push(',');
+                    }
+                }
+                _ => output.push(ch),
+            }
+        }
+
+        i += 1;
+    }
+
+    output
+}
+
+fn parse_model_json<T: for<'de> Deserialize<'de>>(raw: &str) -> Result<T, serde_json::Error> {
+    let cleaned = crate::clean_json(raw);
+    match serde_json::from_str(cleaned) {
+        Ok(value) => Ok(value),
+        Err(_) => serde_json::from_str(&repair_model_json(cleaned)),
+    }
+}
 fn now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let seconds = SystemTime::now()
@@ -842,12 +935,17 @@ pub async fn research_web(
             return Err(error);
         }
     };
-    let parsed: ExtractedResearch = match serde_json::from_str(crate::clean_json(&raw)) {
+    let parsed: ExtractedResearch = match parse_model_json(&raw) {
         Ok(parsed) => parsed,
         Err(error) => {
+            let preview = raw
+                .chars()
+                .take(800)
+                .collect::<String>()
+                .replace('\n', "\\n")
+                .replace('\r', "\\r");
             let error = AppError::ModelResponse(format!(
-                "web research extractor returned invalid JSON: {error}; output starts with: {}",
-                raw.chars().take(300).collect::<String>()
+                "web research extractor returned invalid JSON after repair attempt: {error}; output starts with: {preview}"
             ));
             emit_pipeline(app, "web_research_extractor", "error", error.to_string());
             return Err(error);
