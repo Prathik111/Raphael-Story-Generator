@@ -65,7 +65,7 @@
 .generation-body{display:flex;flex-direction:column;gap:10px;padding:0 9px 9px}
 .trace-block{display:flex;flex-direction:column;gap:5px}
 .trace-box{margin:0;max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;padding:9px;border:1px solid var(--line,#273041);background:rgba(0,0,0,.18)}
-.trace-box.response{max-height:260px}
+.trace-box.response{max-height:260px}.trace-box.thinking{max-height:320px}
 .system-prompt-input{min-height:150px;resize:vertical;font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}
 .settings-scroll>label{margin-bottom:13px}
 
