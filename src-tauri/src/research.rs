@@ -1477,6 +1477,10 @@ mod tests {
             research_query_from_prompt("Write an original story about Naruto Uzumaki"),
             Some("Naruto Uzumaki".into())
         );
+        assert_eq!(
+            research_query_from_prompt("Surprise me with a Naruto story"),
+            Some("Naruto".into())
+        );
     }
 
     #[test]
