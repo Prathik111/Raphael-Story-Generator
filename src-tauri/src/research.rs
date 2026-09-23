@@ -79,6 +79,133 @@ struct ExtractedResearch {
     facts: Vec<ResearchFact>,
 }
 
+fn add_research_subject(subjects: &mut Vec<String>, raw: &str) {
+    let mut subject = raw
+        .trim()
+        .trim_matches(|c: char| matches!(c, ',' | ':' | ';' | '-' | ' ' | '\t' | '\r' | '\n'))
+        .to_string();
+
+    let lower = subject.to_ascii_lowercase();
+    let clause_stops = [
+        " where ",
+        " while ",
+        " when ",
+        " who is ",
+        " that has ",
+        " with a ",
+        " with an ",
+        " with the ",
+        " and then ",
+        " and write ",
+        " and make ",
+        " and create ",
+        " so that ",
+    ];
+
+    if let Some(index) = clause_stops
+        .iter()
+        .filter_map(|stop| lower.find(stop))
+        .min()
+    {
+        subject.truncate(index);
+    }
+
+    if let Some(index) = subject.find(':') {
+        subject.truncate(index);
+    }
+
+    subject = subject.trim().to_string();
+    if subject.is_empty() || is_generic_research_subject(&subject) {
+        return;
+    }
+
+    if subject.split_whitespace().count() <= 12
+        && !subjects.iter().any(|existing| existing.eq_ignore_ascii_case(&subject))
+    {
+        subjects.push(subject);
+    }
+}
+
+fn is_generic_research_subject(subject: &str) -> bool {
+    let normalized = subject.trim().to_ascii_lowercase();
+
+    if matches!(
+        normalized.as_str(),
+        "a dragon"
+            | "a hero"
+            | "a character"
+            | "a person"
+            | "a boy"
+            | "a girl"
+            | "a student"
+            | "a warrior"
+            | "a wizard"
+            | "a king"
+            | "a queen"
+            | "a villain"
+            | "a new character"
+            | "characters"
+            | "someone"
+            | "something"
+            | "something random"
+    ) {
+        return true;
+    }
+
+    let generic_role_words = [
+        "dragon",
+        "hero",
+        "villain",
+        "character",
+        "person",
+        "boy",
+        "girl",
+        "student",
+        "warrior",
+        "wizard",
+        "king",
+        "queen",
+        "child",
+        "kid",
+        "man",
+        "woman",
+    ];
+
+    (normalized.starts_with("a ") || normalized.starts_with("an "))
+        && generic_role_words
+            .iter()
+            .any(|word| normalized.split_whitespace().any(|part| part == *word))
+}
+
+fn add_named_runs(subjects: &mut Vec<String>, prompt: &str) {
+    let Ok(regex) = regex::Regex::new(
+        r"\b[A-Z][A-Za-z0-9_-]{2,30}(?:\s+[A-Z][A-Za-z0-9_-]{2,30}){0,4}\b",
+    ) else {
+        return;
+    };
+
+    let ignored = [
+        "Write", "Create", "Make", "Generate", "Give", "Tell", "Please", "Surprise",
+        "Build", "Let", "Can", "Could", "Would", "Should", "Have", "Has", "The",
+        "This", "That", "Here", "Now", "Story", "Chapter", "Episode", "Scene",
+        "Random", "Original", "New", "Main", "Character", "Characters",
+    ];
+
+    for capture in regex.find_iter(prompt) {
+        let candidate = capture.as_str().trim();
+        if ignored.iter().any(|word| candidate.eq_ignore_ascii_case(word)) {
+            continue;
+        }
+
+        if !subjects.iter().any(|existing| {
+            existing.eq_ignore_ascii_case(candidate)
+                || existing.to_ascii_lowercase().contains(&candidate.to_ascii_lowercase())
+        }) {
+            subjects.push(candidate.to_string());
+        }
+    }
+}
+
 pub fn research_query_from_prompt(prompt: &str) -> Option<String> {
     let prompt = prompt.trim();
     if prompt.is_empty() {
@@ -86,73 +213,85 @@ pub fn research_query_from_prompt(prompt: &str) -> Option<String> {
     }
 
     let lower = prompt.to_ascii_lowercase();
-    let random_markers = [
-        "random story",
-        "random anime story",
-        "random manga story",
-        "something random",
-        "make something up",
-        "surprise me",
-        "anything is fine",
-        "anything you want",
-        "any story",
-        "an original story",
-        "original story",
-        "completely original",
-    ];
-    if random_markers.iter().any(|marker| lower.contains(marker)) {
-        return None;
-    }
-
     let mut subjects = Vec::<String>::new();
-    let patterns = [
-        r"(?i)\b(?:based on|inspired by|featuring|starring|with characters from|characters from|set in the world of|from the world of|about|using)\s+([^.!?\n]+)",
-        r"(?i)\b([A-Z][A-Za-z0-9_-]{1,30}(?:\s+[A-Z][A-Za-z0-9_-]{1,30}){0,4})\s+(?:story|fanfic|fanfiction)\b",
-        r"(?i)^\s*([A-Z][A-Za-z0-9_-]{1,30}(?:\s+[A-Z][A-Za-z0-9_-]{1,30}){0,4})\s+(?:story|fanfic|fanfiction)\b",
+
+    let explicit_patterns = [
+        r"(?i)\b(?:based on|inspired by|featuring|starring|with characters from|characters? from|set in the world of|from the world of|about|with)\s+([^.!?\n,;]+)",
+        r"(?i)\b(?:fanfic|fanfiction)\s+(?:about|for|of)\s+([^.!?\n,;]+)",
+        r#"["“]([^"”]+)["”]"#,
     ];
 
-    for pattern in patterns {
-        let Ok(regex) = regex::Regex::new(pattern) else { continue; };
+    for pattern in explicit_patterns {
+        let Ok(regex) = regex::Regex::new(pattern) else {
+            continue;
+        };
+
         for captures in regex.captures_iter(prompt) {
-            let Some(value) = captures.get(1) else { continue; };
-            let mut subject = value.as_str().trim().to_string();
-
-            for separator in [
-                " where ", " while ", " when ", " and then ", " and write ",
-                " and make ", " that has ", " who is ", " with a scene ",
-            ] {
-                if let Some(index) = subject.to_ascii_lowercase().find(separator) {
-                    subject.truncate(index);
-                }
-            }
-
-            subject = subject
-                .trim_matches(|c: char| c == ',' || c == ':' || c == ';' || c == '-' || c == ' ')
-                .trim()
-                .to_string();
-
-            let lower_subject = subject.to_ascii_lowercase();
-            if subject.is_empty()
-                || matches!(lower_subject.as_str(), "a dragon" | "a hero" | "a character" | "characters" | "someone" | "something")
-            {
-                continue;
-            }
-
-            if subject.split_whitespace().count() <= 12 {
-                subjects.push(subject);
+            if let Some(value) = captures.get(1) {
+                add_research_subject(&mut subjects, value.as_str());
             }
         }
     }
 
-    subjects.sort();
-    subjects.dedup();
+    let external_cues = [
+        "based on",
+        "inspired by",
+        "fanfic",
+        "fanfiction",
+        "characters from",
+        "character from",
+        "set in the world of",
+        "from the world of",
+        "featuring",
+        "starring",
+    ];
+    let has_external_cue = external_cues.iter().any(|cue| lower.contains(cue));
+    let had_explicit_non_generic_subject = !subjects.is_empty();
+
+    if has_external_cue || had_explicit_non_generic_subject || !subjects.is_empty() {
+        add_named_runs(&mut subjects, prompt);
+    }
+
+    let story_pattern = regex::Regex::new(
+        r"\b([A-Z][A-Za-z0-9_-]{2,30}(?:\s+[A-Z][A-Za-z0-9_-]{2,30}){0,4})\s+(?i:story|fanfic|fanfiction)\b",
+    );
+
+    if let Ok(regex) = story_pattern {
+        for captures in regex.captures_iter(prompt) {
+            if let Some(value) = captures.get(1) {
+                add_research_subject(&mut subjects, value.as_str());
+            }
+        }
+    }
+
+    if subjects.is_empty() {
+        let random_markers = [
+            "random story",
+            "random anime story",
+            "random manga story",
+            "something random",
+            "make something up",
+            "surprise me",
+            "anything is fine",
+            "anything you want",
+            "any story",
+            "an original story",
+            "original story",
+            "completely original",
+        ];
+
+        if random_markers.iter().any(|marker| lower.contains(marker)) {
+            return None;
+        }
+    }
 
     if subjects.is_empty() {
         return None;
     }
 
-    Some(subjects.join(" | "))
+    Some(subjects.join(" "))
 }
+
 
 fn repair_model_json(raw: &str) -> String {
     let mut value = crate::clean_json(raw).trim().to_string();
@@ -1297,6 +1436,58 @@ pub async fn check_private_search(settings: &AppSettings) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn research_query_skips_unqualified_random_story() {
+        assert_eq!(research_query_from_prompt("Give me a random story"), None);
+        assert_eq!(research_query_from_prompt("Surprise me with an original story"), None);
+    }
+
+    #[test]
+    fn research_query_keeps_explicit_subjects_even_when_story_is_random_or_original() {
+        assert_eq!(
+            research_query_from_prompt("Write a random story about Naruto Uzumaki"),
+            Some("Naruto Uzumaki".into())
+        );
+        assert_eq!(
+            research_query_from_prompt("Write an original story about Naruto Uzumaki"),
+            Some("Naruto Uzumaki".into())
+        );
+    }
+
+    #[test]
+    fn research_query_extracts_only_story_subjects_and_characters() {
+        let query = research_query_from_prompt(
+            "Write a story based on Attack on Titan where Eren fights Reiner",
+        )
+        .expect("expected research subjects");
+
+        assert!(query.contains("Attack on Titan"));
+        assert!(query.contains("Eren"));
+        assert!(query.contains("Reiner"));
+        assert!(!query.contains("where"));
+        assert!(!query.contains("fights"));
+    }
+
+    #[test]
+    fn research_query_ignores_generic_original_character_descriptions() {
+        assert_eq!(
+            research_query_from_prompt("Write an original story about a brave boy named Alex"),
+            None
+        );
+    }
+
+    #[test]
+    fn research_query_handles_world_and_character_phrasing() {
+        let query = research_query_from_prompt(
+            "Tell me a story set in the world of Jujutsu Kaisen with Gojo Satoru",
+        )
+        .expect("expected research subjects");
+
+        assert!(query.contains("Jujutsu Kaisen"));
+        assert!(query.contains("Gojo Satoru"));
+        assert!(!query.contains("with"));
+    }
 
     #[test]
     fn public_search_endpoints_are_rejected() {
