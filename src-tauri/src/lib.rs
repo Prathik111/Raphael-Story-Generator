@@ -650,7 +650,7 @@ async fn chat(
         error: None,
     });
 
-    let body = json!({
+    let mut body = json!({
         "model": settings.llm_model.trim(),
         "temperature": settings.temperature,
         "stream": true,
@@ -659,6 +659,14 @@ async fn chat(
             {"role":"user","content":user}
         ]
     });
+
+    // Raphael's generation stages all require a final structured answer.
+    // Ollama's OpenAI-compatible endpoint can otherwise spend the entire stream
+    // in the reasoning channel, leaving delta.content empty.
+    let lower_base = base.to_ascii_lowercase();
+    if lower_base.contains("11434") || lower_base.contains("ollama") {
+        body["reasoning_effort"] = json!("none");
+    }
 
     let mut req = client
         .post(url)
@@ -719,8 +727,8 @@ async fn chat(
         return Err(AppError::Llm(message));
     }
 
-    fn extract_content(value: &Value) -> Option<&str> {
-        value
+    fn extract_content(value: &Value) -> Option<String> {
+        let content = value
             .get("choices")
             .and_then(|v| v.get(0))
             .and_then(|choice| {
@@ -732,13 +740,63 @@ async fn chat(
                             .get("message")
                             .and_then(|message| message.get("content"))
                     })
+                    .or_else(|| choice.get("text"))
+            })?;
+
+        if let Some(text) = content.as_str() {
+            return (!text.is_empty()).then(|| text.to_string());
+        }
+
+        if let Some(parts) = content.as_array() {
+            let text = parts
+                .iter()
+                .filter_map(|part| {
+                    part.get("text")
+                        .and_then(Value::as_str)
+                        .or_else(|| part.get("content").and_then(Value::as_str))
+                })
+                .collect::<String>();
+
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+
+        None
+    }
+
+    fn extract_reasoning(value: &Value) -> Option<&str> {
+        value
+            .get("choices")
+            .and_then(|v| v.get(0))
+            .and_then(|choice| {
+                choice
+                    .get("delta")
+                    .and_then(|delta| {
+                        delta
+                            .get("reasoning")
+                            .and_then(Value::as_str)
+                            .or_else(|| delta.get("reasoning_content").and_then(Value::as_str))
+                            .or_else(|| delta.get("thinking").and_then(Value::as_str))
+                    })
+                    .or_else(|| {
+                        choice
+                            .get("message")
+                            .and_then(|message| {
+                                message
+                                    .get("reasoning")
+                                    .and_then(Value::as_str)
+                                    .or_else(|| message.get("reasoning_content").and_then(Value::as_str))
+                                    .or_else(|| message.get("thinking").and_then(Value::as_str))
+                            })
+                    })
             })
-            .and_then(Value::as_str)
             .filter(|text| !text.is_empty())
     }
 
     let token_generation_id = generation_id.clone();
     let mut full_response = String::new();
+    let mut reasoning_response = String::new();
     let mut buffer = Vec::<u8>::new();
     let mut parsed_any = false;
     let mut saw_sse = false;
@@ -756,7 +814,7 @@ async fn chat(
 
         if let Some(text) = extract_content(&value) {
             parsed_any = true;
-            full_response.push_str(text);
+            full_response.push_str(&text);
 
             emit_llm(app, LlmGenerationEvent {
                 generation_id: token_generation_id.clone(),
@@ -765,10 +823,14 @@ async fn chat(
                 model: settings.llm_model.trim().into(),
                 system_prompt: None,
                 user_prompt: None,
-                delta: Some(text.to_string()),
+                delta: Some(text),
                 response: None,
                 error: None,
             });
+        } else if let Some(reasoning) = extract_reasoning(&value) {
+            // Keep reasoning private. We only retain it as an internal fallback
+            // for providers that put the structured answer in the reasoning field.
+            reasoning_response.push_str(reasoning);
         }
     };
 
@@ -823,6 +885,21 @@ async fn chat(
         }
     }
 
+    if !parsed_any && !reasoning_response.trim().is_empty() {
+        // Some reasoning providers put the complete structured answer in the
+        // reasoning field. Preserve only the structured object rather than
+        // surfacing the provider's private chain-of-thought.
+        if let (Some(start), Some(end)) = (
+            reasoning_response.find('{'),
+            reasoning_response.rfind('}'),
+        ) {
+            if start < end {
+                full_response = reasoning_response[start..=end].to_string();
+                parsed_any = true;
+            }
+        }
+    }
+
     if !parsed_any {
         let format = if saw_sse {
             "SSE"
@@ -833,7 +910,7 @@ async fn chat(
         };
 
         let message = format!(
-            "LLM returned a {} response, but no choices[0].message.content or choices[0].delta.content was found (content-type: '{}'). Check the configured LLM endpoint and model response format.",
+            "LLM returned a {} response, but no usable content was found (content-type: '{}'). The provider may be returning only reasoning or an unsupported response shape.",
             format,
             if content_type.is_empty() { "unknown" } else { content_type.as_str() }
         );
