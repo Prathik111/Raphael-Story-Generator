@@ -19,11 +19,11 @@ Rules:
 - Never invent facts.
 - Never fill gaps from your own knowledge.
 - Every factual claim MUST cite one or more source IDs.
-- Every evidence field MUST be a verbatim excerpt copied from one of the supplied source pages.
+- Every evidence field MUST be a verbatim excerpt copied from one of the supplied fetched source pages OR from a supplied SearXNG search snippet when page text is unavailable.
 - Evidence should normally be 8-40 words and must preserve the source wording; do not paraphrase evidence.
 - Prefer primary/official sources when the supplied sources support the same fact.
 - When sources disagree, preserve the disagreement instead of silently resolving it.
-- Do not treat search-result snippets as stronger evidence than fetched page content.
+- Do not treat search-result snippets as stronger evidence than fetched page content; snippets are fallback evidence only.
 - Keep claims concise and useful to the downstream story architect.
 - Return ONLY valid JSON matching the requested schema."#;
 
