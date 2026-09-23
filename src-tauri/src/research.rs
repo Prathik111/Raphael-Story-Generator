@@ -224,7 +224,7 @@ pub fn research_query_from_prompt(prompt: &str) -> Option<String> {
         r"(?i)\b(?:based on|inspired by|featuring|starring|with characters from|characters? from|set in the world of|from the world of|about|with)\s+([^.!?\n,;]+)",
         r"(?i)\b(?:fanfic|fanfiction)\s+(?:about|for|of)\s+([^.!?\n,;]+)",
         r#"["“]([^"”]+)["”]"#,
-        r"(?i:\\b(?:named|called)\\s+)([A-Z][A-Za-z0-9_-]{2,30}(?:\\s+[A-Z][A-Za-z0-9_-]{2,30}){0,4})",
+        r"(?i:\b(?:named|called)\s+)([A-Z][A-Za-z0-9_-]{2,30}(?:\s+[A-Z][A-Za-z0-9_-]{2,30}){0,4})",
     ];
 
     for pattern in explicit_patterns {
