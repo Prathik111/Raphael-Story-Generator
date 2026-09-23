@@ -630,15 +630,20 @@ fn stream_value_text(value: &Value) -> Option<String> {
         return (!text.is_empty()).then(|| text.to_string());
     }
 
+    if let Some(object) = value.as_object() {
+        for key in ["text", "content", "value"] {
+            if let Some(child) = object.get(key) {
+                if let Some(text) = stream_value_text(child) {
+                    return Some(text);
+                }
+            }
+        }
+    }
+
     if let Some(parts) = value.as_array() {
         let text = parts
             .iter()
-            .filter_map(|part| {
-                part.get("text")
-                    .and_then(Value::as_str)
-                    .or_else(|| part.get("content").and_then(Value::as_str))
-                    .or_else(|| part.get("value").and_then(Value::as_str))
-            })
+            .filter_map(stream_value_text)
             .collect::<String>();
 
         if !text.is_empty() {
@@ -2438,11 +2443,16 @@ mod tests {
     }
 
     #[test]
-    fn stream_content_parser_handles_array_and_top_level_shapes() {
+    fn stream_content_parser_handles_array_object_and_top_level_shapes() {
         let parts = json!({
             "choices":[{"delta":{"content":[{"type":"text","text":"hello "},{"type":"text","text":"world"}]}}]
         });
         assert_eq!(extract_stream_content(&parts).as_deref(), Some("hello world"));
+
+        let object = json!({
+            "choices":[{"delta":{"content":{"type":"text","text":"object content"}}}]
+        });
+        assert_eq!(extract_stream_content(&object).as_deref(), Some("object content"));
 
         let response = json!({"response":"final json"});
         assert_eq!(extract_stream_content(&response).as_deref(), Some("final json"));
