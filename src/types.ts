@@ -235,6 +235,8 @@ export interface LlmGenerationEvent {
   model: string;
   system_prompt: string | null;
   user_prompt: string | null;
+  thinking_delta: string | null;
+  thinking: string | null;
   delta: string | null;
   response: string | null;
   error: string | null;
