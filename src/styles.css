@@ -64,8 +64,9 @@
 .generation-model,.generation-status{font-size:8px;opacity:.55;white-space:nowrap}
 .generation-body{display:flex;flex-direction:column;gap:10px;padding:0 9px 9px}
 .trace-block{display:flex;flex-direction:column;gap:5px}
-.trace-box{margin:0;max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;padding:9px;border:1px solid var(--line,#273041);background:rgba(0,0,0,.18)}
-.trace-box.response{max-height:260px}.trace-box.thinking{max-height:320px}
+.trace-box{margin:0;max-height:180px;overflow:auto;white-space:pre-wrap;tab-size:2;word-break:break-word;overflow-wrap:anywhere;font:11px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;padding:11px 12px;border:1px solid var(--line,#273041);background:rgba(0,0,0,.18)}
+.trace-box.response{max-height:360px;line-height:1.55}
+.trace-box.thinking{max-height:360px;line-height:1.65;white-space:pre-wrap}
 .system-prompt-input{min-height:150px;resize:vertical;font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}
 .settings-scroll>label{margin-bottom:13px}
 
