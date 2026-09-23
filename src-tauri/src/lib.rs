@@ -625,6 +625,88 @@ fn emit_llm_error(app: &AppHandle, generation_id: &str, stage: &str, model: &str
     });
 }
 
+fn stream_value_text(value: &Value) -> Option<String> {
+    if let Some(text) = value.as_str() {
+        return (!text.is_empty()).then(|| text.to_string());
+    }
+
+    if let Some(parts) = value.as_array() {
+        let text = parts
+            .iter()
+            .filter_map(|part| {
+                part.get("text")
+                    .and_then(Value::as_str)
+                    .or_else(|| part.get("content").and_then(Value::as_str))
+                    .or_else(|| part.get("value").and_then(Value::as_str))
+            })
+            .collect::<String>();
+
+        if !text.is_empty() {
+            return Some(text);
+        }
+    }
+
+    None
+}
+
+fn extract_stream_content(value: &Value) -> Option<String> {
+    let candidates = [
+        value
+            .get("choices")
+            .and_then(|v| v.get(0))
+            .and_then(|choice| choice.get("delta"))
+            .and_then(|delta| delta.get("content")),
+        value
+            .get("choices")
+            .and_then(|v| v.get(0))
+            .and_then(|choice| choice.get("message"))
+            .and_then(|message| message.get("content")),
+        value
+            .get("choices")
+            .and_then(|v| v.get(0))
+            .and_then(|choice| choice.get("text")),
+        value.get("message").and_then(|message| message.get("content")),
+        value.get("output_text"),
+        value.get("response"),
+        value.get("content"),
+        value.get("text"),
+    ];
+
+    candidates.into_iter().flatten().find_map(stream_value_text)
+}
+
+fn extract_stream_reasoning(value: &Value) -> Option<&str> {
+    value
+        .get("choices")
+        .and_then(|v| v.get(0))
+        .and_then(|choice| {
+            choice
+                .get("delta")
+                .and_then(|delta| {
+                    delta
+                        .get("reasoning")
+                        .and_then(Value::as_str)
+                        .or_else(|| delta.get("reasoning_content").and_then(Value::as_str))
+                        .or_else(|| delta.get("thinking").and_then(Value::as_str))
+                })
+                .or_else(|| {
+                    choice
+                        .get("message")
+                        .and_then(|message| {
+                            message
+                                .get("reasoning")
+                                .and_then(Value::as_str)
+                                .or_else(|| message.get("reasoning_content").and_then(Value::as_str))
+                                .or_else(|| message.get("thinking").and_then(Value::as_str))
+                        })
+                })
+        })
+        .or_else(|| value.get("reasoning").and_then(Value::as_str))
+        .or_else(|| value.get("reasoning_content").and_then(Value::as_str))
+        .or_else(|| value.get("thinking").and_then(Value::as_str))
+        .filter(|text| !text.is_empty())
+}
+
 async fn chat(
     app: &AppHandle,
     settings: &AppSettings,
@@ -734,84 +816,6 @@ async fn chat(
         return Err(AppError::Llm(message));
     }
 
-    fn value_text(value: &Value) -> Option<String> {
-        if let Some(text) = value.as_str() {
-            return (!text.is_empty()).then(|| text.to_string());
-        }
-
-        if let Some(parts) = value.as_array() {
-            let text = parts
-                .iter()
-                .filter_map(|part| {
-                    part.get("text")
-                        .and_then(Value::as_str)
-                        .or_else(|| part.get("content").and_then(Value::as_str))
-                        .or_else(|| part.get("value").and_then(Value::as_str))
-                })
-                .collect::<String>();
-            if !text.is_empty() {
-                return Some(text);
-            }
-        }
-
-        None
-    }
-
-    fn extract_content(value: &Value) -> Option<String> {
-        let candidates = [
-            value.get("choices")
-                .and_then(|v| v.get(0))
-                .and_then(|choice| choice.get("delta"))
-                .and_then(|delta| delta.get("content")),
-            value.get("choices")
-                .and_then(|v| v.get(0))
-                .and_then(|choice| choice.get("message"))
-                .and_then(|message| message.get("content")),
-            value.get("choices")
-                .and_then(|v| v.get(0))
-                .and_then(|choice| choice.get("text")),
-            value.get("message").and_then(|message| message.get("content")),
-            value.get("output_text"),
-            value.get("response"),
-            value.get("content"),
-            value.get("text"),
-        ];
-
-        candidates.into_iter().flatten().find_map(value_text)
-    }
-
-    fn extract_reasoning(value: &Value) -> Option<&str> {
-        value
-            .get("choices")
-            .and_then(|v| v.get(0))
-            .and_then(|choice| {
-                choice
-                    .get("delta")
-                    .and_then(|delta| {
-                        delta
-                            .get("reasoning")
-                            .and_then(Value::as_str)
-                            .or_else(|| delta.get("reasoning_content").and_then(Value::as_str))
-                            .or_else(|| delta.get("thinking").and_then(Value::as_str))
-                    })
-                    .or_else(|| {
-                        choice
-                            .get("message")
-                            .and_then(|message| {
-                                message
-                                    .get("reasoning")
-                                    .and_then(Value::as_str)
-                                    .or_else(|| message.get("reasoning_content").and_then(Value::as_str))
-                                    .or_else(|| message.get("thinking").and_then(Value::as_str))
-                            })
-                    })
-            })
-            .or_else(|| value.get("reasoning").and_then(Value::as_str))
-            .or_else(|| value.get("reasoning_content").and_then(Value::as_str))
-            .or_else(|| value.get("thinking").and_then(Value::as_str))
-            .filter(|text| !text.is_empty())
-    }
-
     let token_generation_id = generation_id.clone();
     let mut full_response = String::new();
     let mut reasoning_response = String::new();
@@ -830,7 +834,7 @@ async fn chat(
             return;
         };
 
-        if let Some(reasoning) = extract_reasoning(&value) {
+        if let Some(reasoning) = extract_stream_reasoning(&value) {
             reasoning_response.push_str(reasoning);
 
             emit_llm(app, LlmGenerationEvent {
@@ -848,7 +852,7 @@ async fn chat(
             });
         }
 
-        if let Some(text) = extract_content(&value) {
+        if let Some(text) = extract_stream_content(&value) {
             parsed_any = true;
             full_response.push_str(&text);
 
@@ -2416,6 +2420,41 @@ mod tests {
             research::research_query_from_prompt("Write a story about Naruto Uzumaki"),
             Some("Naruto Uzumaki".into())
         );
+    }
+
+    #[test]
+    fn stream_content_parser_handles_openai_delta_and_ollama_message_shapes() {
+        let openai = json!({"choices":[{"delta":{"content":"{\\"title\\":\\"X\\"}"}}]});
+        assert_eq!(
+            extract_stream_content(&openai).as_deref(),
+            Some("{\\"title\\":\\"X\\"}")
+        );
+
+        let ollama = json!({"message":{"content":"{\\"title\\":\\"X\\"}"}});
+        assert_eq!(
+            extract_stream_content(&ollama).as_deref(),
+            Some("{\\"title\\":\\"X\\"}")
+        );
+    }
+
+    #[test]
+    fn stream_content_parser_handles_array_and_top_level_shapes() {
+        let parts = json!({
+            "choices":[{"delta":{"content":[{"type":"text","text":"hello "},{"type":"text","text":"world"}]}}]
+        });
+        assert_eq!(extract_stream_content(&parts).as_deref(), Some("hello world"));
+
+        let response = json!({"response":"final json"});
+        assert_eq!(extract_stream_content(&response).as_deref(), Some("final json"));
+    }
+
+    #[test]
+    fn stream_reasoning_parser_handles_nested_and_top_level_shapes() {
+        let nested = json!({"choices":[{"delta":{"reasoning":"thinking..."}}]});
+        assert_eq!(extract_stream_reasoning(&nested), Some("thinking..."));
+
+        let top_level = json!({"thinking":"still thinking"});
+        assert_eq!(extract_stream_reasoning(&top_level), Some("still thinking"));
     }
 
     #[test]
