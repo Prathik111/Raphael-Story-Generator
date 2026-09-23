@@ -873,9 +873,26 @@ export default function App() {
 
   useEffect(() => { if (!story && state?.stories[0]) void selectStory(state.stories[0].id); }, [state?.stories]);
 
+  const appendLocalPipelineEvent = (stage: string, status: PipelineEvent['status'], message: string) => {
+    const eventId = \`ui-\${Date.now()}-\${Math.random().toString(36).slice(2)}\`;
+    setPipelineTrace(current => [...current, {
+      event_id: eventId,
+      stage,
+      status,
+      message,
+    }]);
+    return eventId;
+  };
+
+  const updateLocalPipelineEvent = (eventId: string, status: PipelineEvent['status'], message: string) => {
+    setPipelineTrace(current => current.map(event => event.event_id === eventId ? { ...event, status, message } : event));
+  };
+
   const generateStory = async () => {
     if (!prompt.trim() || busy || !checkpointId || registryStatus.status !== 'on') return;
-    setBusy(true); setError(null);
+    setBusy(true);
+    setError(null);
+    const traceId = appendLocalPipelineEvent('generation', 'started', 'Generation started — preparing research and model calls…');
     try {
       const visualSetup: StoryVisualSetup = { checkpoint_id: checkpointId, style_lora_ids: styleLoraIds.slice(0, 2) };
       const next = await api.createStory(prompt.trim(), visualSetup);
@@ -883,9 +900,36 @@ export default function App() {
       setSelectedChapterNumber(next.chapters[next.chapters.length - 1]?.number ?? null);
       setPrompt('');
       await loadState();
-    } catch (e) { setError(toErrorMessage(e)); } finally { setBusy(false); }
+      updateLocalPipelineEvent(traceId, 'completed', 'Generation completed successfully.');
+    } catch (e) {
+      const message = toErrorMessage(e);
+      updateLocalPipelineEvent(traceId, 'error', message);
+      setError(message);
+    } finally {
+      setBusy(false);
+    }
   };
-  const generateNext = async () => { if (!story || busy) return; setBusy(true); setError(null); try { const next = await api.generateNextChapter(story.id, directive.trim()); setStory(next); setSelectedChapterNumber(next.chapters[next.chapters.length - 1]?.number ?? null); setDirective(''); await loadState(); } catch (e) { setError(toErrorMessage(e)); } finally { setBusy(false); } };
+
+  const generateNext = async () => {
+    if (!story || busy) return;
+    setBusy(true);
+    setError(null);
+    const traceId = appendLocalPipelineEvent('generation', 'started', \`Chapter generation started — preparing Chapter \${story.chapters.length + 1}…\`);
+    try {
+      const next = await api.generateNextChapter(story.id, directive.trim());
+      setStory(next);
+      setSelectedChapterNumber(next.chapters[next.chapters.length - 1]?.number ?? null);
+      setDirective('');
+      await loadState();
+      updateLocalPipelineEvent(traceId, 'completed', 'Chapter generation completed successfully.');
+    } catch (e) {
+      const message = toErrorMessage(e);
+      updateLocalPipelineEvent(traceId, 'error', message);
+      setError(message);
+    } finally {
+      setBusy(false);
+    }
+  };
   const extractScenes = async (chapter: Chapter) => {
     if (!story || extracting) return;
     if (chapter.scenes.length > 0 && !window.confirm('Rebuild scenes? Existing scene prompts, queue IDs, and image state for this chapter will be replaced.')) {
