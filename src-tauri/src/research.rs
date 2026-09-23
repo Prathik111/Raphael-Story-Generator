@@ -114,7 +114,11 @@ fn add_research_subject(subjects: &mut Vec<String>, raw: &str) {
         subject.truncate(index);
     }
 
-    subject = subject.trim().to_string();
+    subject = subject
+        .trim()
+        .trim_matches(|c: char| matches!(c, '"' | '“' | '”' | '\''))
+        .trim()
+        .to_string();
     if subject.is_empty() || is_generic_research_subject(&subject) {
         return;
     }
@@ -147,6 +151,8 @@ fn is_generic_research_subject(subject: &str) -> bool {
             | "a story"
             | "a random story"
             | "an original story"
+            | "an original"
+            | "a random"
             | "an anime story"
             | "a manga story"
             | "characters"
@@ -191,23 +197,43 @@ fn add_named_runs(subjects: &mut Vec<String>, prompt: &str) {
 
     let ignored = [
         "Write", "Create", "Make", "Generate", "Give", "Tell", "Please", "Surprise",
-        "Build", "Let", "Can", "Could", "Would", "Should", "Have", "Has", "The",
-        "This", "That", "Here", "Now", "Story", "Chapter", "Episode", "Scene",
+        "Build", "Let", "Can", "Could", "Would", "Should", "Have", "Has",
+        "Story", "Chapter", "Episode", "Scene",
         "Random", "Original", "New", "Main", "Character", "Characters",
         "Anime", "Manga", "Game", "Series", "Show", "Movie", "Book",
     ];
+    let leading_instruction_words = [
+        "Write", "Create", "Make", "Generate", "Give", "Tell", "Please", "Surprise",
+        "Build", "Introduce", "Add", "Remove", "Show", "Keep", "Set", "Use", "Bring",
+    ];
 
     for capture in regex.find_iter(prompt) {
-        let candidate = capture.as_str().trim();
-        if ignored.iter().any(|word| candidate.eq_ignore_ascii_case(word)) {
+        let mut candidate = capture.as_str().trim().to_string();
+
+        loop {
+            let Some((first, rest)) = candidate.split_once(char::is_whitespace) else {
+                break;
+            };
+            if !leading_instruction_words
+                .iter()
+                .any(|word| first.eq_ignore_ascii_case(word))
+            {
+                break;
+            }
+            candidate = rest.trim().to_string();
+        }
+
+        if candidate.is_empty()
+            || ignored.iter().any(|word| candidate.eq_ignore_ascii_case(word))
+        {
             continue;
         }
 
         if !subjects.iter().any(|existing| {
-            existing.eq_ignore_ascii_case(candidate)
+            existing.eq_ignore_ascii_case(&candidate)
                 || existing.to_ascii_lowercase().contains(&candidate.to_ascii_lowercase())
         }) {
-            subjects.push(candidate.to_string());
+            subjects.push(candidate);
         }
     }
 }
