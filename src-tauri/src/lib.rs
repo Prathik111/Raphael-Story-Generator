@@ -322,25 +322,83 @@ pub struct AppStateDto {
     pub llm_api_key_configured: bool,
 }
 
-fn normalize_story_architect_json_numbers(value: &mut Value) {
+fn json_value_as_string(value: &Value) -> Value {
     match value {
-        Value::Array(items) => {
-            for item in items {
-                normalize_story_architect_json_numbers(item);
-            }
-        }
-        Value::Object(map) => {
-            for item in map.values_mut() {
-                normalize_story_architect_json_numbers(item);
-            }
-        }
-        Value::Number(number) => {
-            let text = number.to_string();
-            *value = Value::String(text);
-        }
-        Value::String(_) | Value::Bool(_) | Value::Null => {}
+        Value::String(_) => value.clone(),
+        Value::Null => Value::String(String::new()),
+        _ => Value::String(serde_json::to_string(value).unwrap_or_else(|_| value.to_string())),
     }
 }
+
+fn normalize_story_architect_json(value: &mut Value) {
+    const STRING_KEYS: &[&str] = &[
+        "title",
+        "demographic",
+        "content_rating",
+        "source_type",
+        "source_title",
+        "premise",
+        "central_conflict",
+        "world_setting",
+        "name",
+        "role",
+        "appearance",
+        "clothing",
+        "relation_type",
+        "description",
+        "source",
+        "target",
+        "introduction",
+        "summary",
+        "text",
+        "character_id",
+        "current_state",
+        "source_character",
+        "target_character",
+    ];
+
+    const STRING_ARRAY_KEYS: &[&str] = &[
+        "genre",
+        "tags",
+        "tone",
+        "inspirations",
+        "themes",
+        "world_rules",
+        "locations",
+        "personality",
+        "motivations",
+        "events",
+        "continuity_updates",
+        "open_threads",
+    ];
+
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                if STRING_KEYS.iter().any(|candidate| *candidate == key) {
+                    *child = json_value_as_string(child);
+                } else if STRING_ARRAY_KEYS.iter().any(|candidate| *candidate == key) {
+                    if let Value::Array(items) = child {
+                        for item in items.iter_mut() {
+                            *item = json_value_as_string(item);
+                        }
+                    } else {
+                        *child = Value::Array(vec![json_value_as_string(child)]);
+                    }
+                } else {
+                    normalize_story_architect_json(child);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                normalize_story_architect_json(item);
+            }
+        }
+        Value::String(_) | Value::Number(_) | Value::Bool(_) | Value::Null => {}
+    }
+}
+
 
 fn parse_story_architect_response(raw: &str) -> Result<InitialResponse, String> {
     let cleaned = clean_json(raw);
@@ -351,10 +409,10 @@ fn parse_story_architect_response(raw: &str) -> Result<InitialResponse, String> 
             let mut value = serde_json::from_str::<Value>(cleaned)
                 .map_err(|json_error| format!("invalid JSON: {json_error}; strict schema error: {strict_error}"))?;
 
-            normalize_story_architect_json_numbers(&mut value);
+            normalize_story_architect_json(&mut value);
 
             serde_json::from_value::<InitialResponse>(value).map_err(|tolerant_error| {
-                format!("strict schema error: {strict_error}; numeric-string compatibility parse also failed: {tolerant_error}")
+                format!("strict schema error: {strict_error}; compatibility normalization parse also failed: {tolerant_error}")
             })
         }
     }
@@ -2542,6 +2600,43 @@ mod tests {
 
         let parsed = parse_story_architect_response(raw).expect("numeric string compatibility should parse");
         assert_eq!(parsed.characters[0].role, "1.5");
+    }
+
+    #[test]
+    fn story_architect_parser_stringifies_object_values_only_on_string_fields() {
+        let raw = r#"{
+            "title":"Test",
+            "metadata":{"genre":["Fantasy"],"tags":["Magic"],"demographic":"General Audience","content_rating":"PG-13","tone":["Epic"],"source_type":"","source_title":"","inspirations":[]},
+            "premise":"A test premise",
+            "central_conflict":"A test conflict",
+            "themes":["identity"],
+            "world_setting":"A test world",
+            "world_rules":["magic"],
+            "locations":["Tower"],
+            "characters":[{
+                "name":"Hero",
+                "role":"Mage",
+                "personality":["calm"],
+                "appearance":{"height":"tall","hair":"black"},
+                "clothing":"coat",
+                "motivations":["survive"]
+            }],
+            "relationships":[],
+            "open_threads":[],
+            "introduction":"Intro",
+            "chapter":{
+                "title":"Chapter 1",
+                "summary":"Summary",
+                "text":"Text",
+                "events":[],
+                "continuity_updates":[],
+                "character_state_updates":[],
+                "relationship_updates":[]
+            }
+        }"#;
+
+        let parsed = parse_story_architect_response(raw).expect("object-valued string field should normalize");
+        assert_eq!(parsed.characters[0].appearance, r#"{"height":"tall","hair":"black"}"#);
     }
 
     #[test]
