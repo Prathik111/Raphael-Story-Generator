@@ -94,24 +94,6 @@ async fn probe_endpoint(client: &Client, base: &Url, path: &str) -> AppResult<()
     Ok(())
 }
 
-pub async fn check_api(raw: &str) -> AppResult<()> {
-    let base = base_url(raw)?;
-    let client = http_client()?;
-    let mut errors = Vec::new();
-
-    for endpoint in ["system_stats", "queue", "object_info"] {
-        match probe_endpoint(&client, &base, endpoint).await {
-            Ok(()) => return Ok(()),
-            Err(error) => errors.push(error.to_string()),
-        }
-    }
-
-    Err(AppError::ComfyUi(format!(
-        "ComfyUI was not detected at {}. Tried /system_stats, /queue, and /object_info. {}",
-        base,
-        errors.join(" | ")
-    )))
-}
 
 pub async fn detect_api_url(configured: &str) -> AppResult<String> {
     let mut candidates = Vec::<String>::new();
