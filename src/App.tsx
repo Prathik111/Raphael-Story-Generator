@@ -874,7 +874,7 @@ export default function App() {
   useEffect(() => { if (!story && state?.stories[0]) void selectStory(state.stories[0].id); }, [state?.stories]);
 
   const appendLocalPipelineEvent = (stage: string, status: PipelineEvent['status'], message: string) => {
-    const eventId = \`ui-\${Date.now()}-\${Math.random().toString(36).slice(2)}\`;
+    const eventId = `ui-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setPipelineTrace(current => [...current, {
       event_id: eventId,
       stage,
