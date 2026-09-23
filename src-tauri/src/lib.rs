@@ -2336,7 +2336,8 @@ async fn get_service_status(
 async fn test_private_web_research(store: State<'_, Store>) -> AppResult<String> {
     let settings = store.settings.read().map_err(|e| AppError::Storage(e.to_string()))?.clone();
     privacy_gateway::ensure_started_with_settings(store.app(), &settings).await?;
-    Ok("Private web research gateway is running and Tor routing is verified.".into())
+    research::check_search_api(&settings).await?;
+    Ok("Private web research gateway is running, Tor routing is verified, and SearXNG returned usable search results.".into())
 }
 
 pub fn run() {
