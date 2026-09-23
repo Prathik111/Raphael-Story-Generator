@@ -335,30 +335,34 @@ pub async fn check_search_api(settings: &AppSettings) -> AppResult<()> {
     let base = ensure_local_endpoint(settings.web_search_url.trim(), "web search")?;
     let url = base.join("search").map_err(|error| AppError::WebResearch(format!("invalid SearXNG search URL: {error}")))?;
     let client = build_local_client(Duration::from_secs(8))?;
-    let request = |method: &str| async {
-        match method {
-            "POST" => client
-                .post(url.clone())
-                .form(&[
-                    ("q", "OpenAI"),
-                    ("format", "json"),
-                    ("language", "en"),
-                    ("categories", "general"),
-                    ("safesearch", "1"),
-                ])
-                .send()
-                .await,
-            _ => client
-                .get(url.clone())
-                .query(&[
-                    ("q", "OpenAI"),
-                    ("format", "json"),
-                    ("language", "en"),
-                    ("categories", "general"),
-                    ("safesearch", "1"),
-                ])
-                .send()
-                .await,
+    let request = |method: &'static str| {
+        let client = client.clone();
+        let url = url.clone();
+        async move {
+            match method {
+                "POST" => client
+                    .post(url)
+                    .form(&[
+                        ("q", "OpenAI"),
+                        ("format", "json"),
+                        ("language", "en"),
+                        ("categories", "general"),
+                        ("safesearch", "1"),
+                    ])
+                    .send()
+                    .await,
+                _ => client
+                    .get(url)
+                    .query(&[
+                        ("q", "OpenAI"),
+                        ("format", "json"),
+                        ("language", "en"),
+                        ("categories", "general"),
+                        ("safesearch", "1"),
+                    ])
+                    .send()
+                    .await,
+            }
         }
     };
 
