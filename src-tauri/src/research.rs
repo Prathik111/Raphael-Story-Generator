@@ -334,7 +334,7 @@ fn validate_source_url(raw: &str) -> AppResult<Url> {
 pub async fn check_search_api(settings: &AppSettings) -> AppResult<()> {
     let base = ensure_local_endpoint(settings.web_search_url.trim(), "web search")?;
     let url = base.join("search").map_err(|error| AppError::WebResearch(format!("invalid SearXNG search URL: {error}")))?;
-    let client = build_local_client(Duration::from_secs(8))?;
+    let client = build_local_client(Duration::from_secs(45))?;
     let request = |method: &'static str| {
         let client = client.clone();
         let url = url.clone();
@@ -428,7 +428,7 @@ async fn search_once(
         .join("search")
         .map_err(|error| AppError::WebResearch(format!("invalid SearXNG search URL: {error}")))?;
 
-    let client = build_local_client(Duration::from_secs(20))?;
+    let client = build_local_client(Duration::from_secs(45))?;
     let response = match method {
         SearchRequestMethod::Post => {
             client
