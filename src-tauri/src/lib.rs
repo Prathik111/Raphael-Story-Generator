@@ -497,8 +497,7 @@ fn load_json<T: for<'de> Deserialize<'de>>(path: &PathBuf) -> AppResult<T> {
     match try_read(path) {
         Ok(value) => Ok(value),
         Err(primary_error) => {
-            let backup = PathBuf::from(format!("{}.bak", path.display()));
-            if let Ok(value) = try_read(&backup) {
+            let backup = PathBuf::from(format!("{}.bak", path.display()));            if let Ok(value) = try_read(&backup) {
                 let _ = fs::copy(&backup, path);
                 return Ok(value);
             }
@@ -728,6 +727,7 @@ async fn chat(
             .filter(|text| !text.is_empty())
     }
 
+    let token_generation_id = generation_id.clone();
     let mut full_response = String::new();
     let mut buffer = Vec::<u8>::new();
     let mut parsed_any = false;
@@ -747,7 +747,7 @@ async fn chat(
             parsed_any = true;
             full_response.push_str(text);
             emit_llm(app, LlmGenerationEvent {
-                generation_id: generation_id.clone(),
+                generation_id: token_generation_id.clone(),
                 stage: stage.into(),
                 status: "token".into(),
                 model: settings.llm_model.trim().into(),
@@ -997,8 +997,7 @@ fn validate_visual_setup(
     Ok(())
 }
 
-fn validate_settings(settings: &AppSettings) -> AppResult<()> {
-    if settings.llm_model.trim().is_empty() {
+fn validate_settings(settings: &AppSettings) -> AppResult<()> {    if settings.llm_model.trim().is_empty() {
         return Err(AppError::Llm("LLM model cannot be empty".into()));
     }
     if !settings.temperature.is_finite() || !(0.0..=2.0).contains(&settings.temperature) {
@@ -1497,8 +1496,7 @@ Return:
                     character_name
                 )));
             }
-        }
-    }
+        }    }
     let scenes = parsed.scenes.into_iter().enumerate().map(|(index, scene)| Scene {
         id: format!("{}-scene-{:03}", chapter.number, index + 1), order: index + 1, description: scene.description,
         location: scene.location, time: scene.time, characters: scene.characters, action: scene.action,
@@ -1998,7 +1996,6 @@ fn model_manager_app_data_candidates() -> Vec<PathBuf> {
     if let Some(value) = env::var_os("RAPHAEL_MODEL_MANAGER_APP_DATA_DIR") {
         candidates.push(PathBuf::from(value));
     }
-
     if let Some(value) = env::var_os("APPDATA") {
         candidates.push(PathBuf::from(value).join("com.raphael.modelmanager"));
     }
