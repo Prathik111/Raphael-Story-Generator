@@ -82,7 +82,7 @@ struct ExtractedResearch {
 fn add_research_subject(subjects: &mut Vec<String>, raw: &str) {
     let mut subject = raw
         .trim()
-        .trim_matches(|c: char| matches!(c, ',' | ':' | ';' | '-' | ' ' | '\t' | '\r' | '\n'))
+        .trim_matches(|c: char| matches!(c, ',' | ':' | ';' | '-' | '"' | '“' | '”' | '\'' | ' ' | '\t' | '\r' | '\n'))
         .to_string();
 
     let lower = subject.to_ascii_lowercase();
@@ -252,9 +252,7 @@ pub fn research_query_from_prompt(prompt: &str) -> Option<String> {
         "starring",
     ];
     let has_external_cue = external_cues.iter().any(|cue| lower.contains(cue));
-    let had_explicit_non_generic_subject = !subjects.is_empty();
-
-    if has_external_cue || had_explicit_non_generic_subject || !subjects.is_empty() {
+    if has_external_cue || !subjects.is_empty() {
         add_named_runs(&mut subjects, prompt);
     }
 
