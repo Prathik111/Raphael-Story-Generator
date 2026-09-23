@@ -500,6 +500,73 @@ function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPromp
   </div>;
 }
 
+function formatTraceText(value: string, prettyJson: boolean = false): string {
+  const normalized = value.replace(/\\r\\n/g, '\\n').replace(/\\r/g, '\\n').trim();
+
+  if (!normalized) return '';
+
+  if (prettyJson && (normalized.startsWith('{') || normalized.startsWith('['))) {
+    try {
+      return JSON.stringify(JSON.parse(normalized), null, 2);
+    } catch {
+      // While streaming, the JSON may be incomplete. Fall through to the
+      // lightweight formatter so indentation still improves progressively.
+      let output = '';
+      let indent = 0;
+      let inString = false;
+      let escaped = false;
+
+      for (const char of normalized) {
+        if (escaped) {
+          output += char;
+          escaped = false;
+          continue;
+        }
+
+        if (char === '\\' && inString) {
+          output += char;
+          escaped = true;
+          continue;
+        }
+
+        if (char === '"' ) {
+          inString = !inString;
+          output += char;
+          continue;
+        }
+
+        if (inString) {
+          output += char;
+          continue;
+        }
+
+        if (char === '{' || char === '[') {
+          output = output.trimEnd() + char + '\\n';
+          indent += 1;
+          output += '  '.repeat(indent);
+        } else if (char === '}' || char === ']') {
+          indent = Math.max(0, indent - 1);
+          output = output.trimEnd() + '\\n' + '  '.repeat(indent) + char;
+        } else if (char === ',') {
+          output = output.trimEnd() + ',\\n' + '  '.repeat(indent);
+        } else if (char === ':') {
+          output = output.trimEnd() + ': ';
+        } else {
+          output += char;
+        }
+      }
+
+      return output.replace(/\\n{3,}/g, '\\n\\n').trim();
+    }
+  }
+
+  return normalized
+    .replace(/\\n[ \\t]+/g, '\\n')
+    .replace(/[ \\t]{2,}/g, ' ')
+    .replace(/\\n{3,}/g, '\\n\\n')
+    .trim();
+}
+
 type GenerationTrace = {
   generation_id: string;
   stage: string;
@@ -548,19 +615,19 @@ function GenerationMonitor({
           <div className="generation-body">
             <div className="trace-block">
               <div className="section-head">SYSTEM PROMPT</div>
-              <pre className="trace-box">{generation.system_prompt}</pre>
+              <pre className="trace-box">{formatTraceText(generation.system_prompt)}</pre>
             </div>
             <div className="trace-block">
               <div className="section-head">USER PROMPT</div>
-              <pre className="trace-box">{generation.user_prompt}</pre>
+              <pre className="trace-box">{formatTraceText(generation.user_prompt)}</pre>
             </div>
             <div className="trace-block">
               <div className="section-head">MODEL THINKING {(generation.status === 'started' || generation.status === 'token') ? '· STREAMING' : ''}</div>
-              <pre className="trace-box thinking">{generation.thinking || '(no provider thinking stream)'}</pre>
+              <pre className="trace-box thinking">{formatTraceText(generation.thinking || '(no provider thinking stream)')}</pre>
             </div>
             <div className="trace-block">
               <div className="section-head">LLM RESPONSE {(generation.status === 'started' || generation.status === 'token') ? '· STREAMING' : ''}</div>
-              <pre className="trace-box response">{generation.response}{(generation.status === 'started' || generation.status === 'token') ? '▌' : ''}</pre>
+              <pre className="trace-box response">{formatTraceText(generation.response, true)}{(generation.status === 'started' || generation.status === 'token') ? '▌' : ''}</pre>
             </div>
             {generation.error ? <div className="error-box">{generation.error}</div> : null}
           </div>
