@@ -861,6 +861,10 @@ async fn chat(
     let mut req = client
         .post(url)
         .header(CONTENT_TYPE, "application/json")
+        // Local/OpenAI-compatible servers can expose malformed or partial
+        // compressed streams. Request identity encoding so the byte stream
+        // reaches Raphael exactly as the provider emitted it.
+        .header("Accept-Encoding", "identity")
         .json(&body);
 
     if !settings.llm_api_key.trim().is_empty() {
@@ -923,6 +927,7 @@ async fn chat(
     let mut buffer = Vec::<u8>::new();
     let mut parsed_any = false;
     let mut saw_sse = false;
+    let mut stream_error: Option<String> = None;
 
     let mut consume_payload = |payload: &str| {
         let data = payload.trim();
@@ -981,16 +986,11 @@ async fn chat(
         let chunk = match chunk {
             Ok(chunk) => chunk,
             Err(error) => {
-                let message = error.to_string();
-                emit_llm_error(
-                    app,
-                    &generation_id,
-                    stage,
-                    settings.llm_model.trim(),
-                    Some(full_response.clone()),
-                    message.clone(),
-                );
-                return Err(AppError::Llm(message));
+                stream_error = Some(error.to_string());
+                // Do not immediately discard a response that already contains
+                // usable JSON. Some providers close an otherwise valid SSE
+                // stream with a transport/framing error.
+                break;
             }
         };
 
@@ -1037,6 +1037,36 @@ async fn chat(
                 parsed_any = true;
             }
         }
+    }
+
+    let complete_json = parsed_any
+        && serde_json::from_str::<Value>(clean_json(&full_response)).is_ok();
+
+    if let Some(error) = stream_error.as_deref() {
+        if !complete_json {
+            let message = format!(
+                "LLM stream transport failed before a complete JSON response was received: {error} (content-type: '{}')",
+                if content_type.is_empty() { "unknown" } else { content_type.as_str() }
+            );
+
+            emit_pipeline(app, stage, "error", message.clone());
+            emit_llm_error(
+                app,
+                &generation_id,
+                stage,
+                settings.llm_model.trim(),
+                Some(full_response.clone()),
+                message.clone(),
+            );
+            return Err(AppError::Llm(message));
+        }
+
+        emit_pipeline(
+            app,
+            stage,
+            "completed",
+            format!("LLM stream ended with a transport error after a complete response was received; preserving the complete response: {error}"),
+        );
     }
 
     if !parsed_any {
