@@ -322,6 +322,44 @@ pub struct AppStateDto {
     pub llm_api_key_configured: bool,
 }
 
+fn normalize_story_architect_json_numbers(value: &mut Value) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                normalize_story_architect_json_numbers(item);
+            }
+        }
+        Value::Object(map) => {
+            for item in map.values_mut() {
+                normalize_story_architect_json_numbers(item);
+            }
+        }
+        Value::Number(number) => {
+            let text = number.to_string();
+            *value = Value::String(text);
+        }
+        Value::String(_) | Value::Bool(_) | Value::Null => {}
+    }
+}
+
+fn parse_story_architect_response(raw: &str) -> Result<InitialResponse, String> {
+    let cleaned = clean_json(raw);
+
+    match serde_json::from_str::<InitialResponse>(cleaned) {
+        Ok(parsed) => return Ok(parsed),
+        Err(strict_error) => {
+            let mut value = serde_json::from_str::<Value>(cleaned)
+                .map_err(|json_error| format!("invalid JSON: {json_error}; strict schema error: {strict_error}"))?;
+
+            normalize_story_architect_json_numbers(&mut value);
+
+            serde_json::from_value::<InitialResponse>(value).map_err(|tolerant_error| {
+                format!("strict schema error: {strict_error}; numeric-string compatibility parse also failed: {tolerant_error}")
+            })
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Default)]
 #[serde(default)]
 struct InitialResponse {
@@ -1456,7 +1494,8 @@ Use the web-research facts only when they are supported by the cited sources. Do
 Return the JSON shape above.", prompt.trim(), research_context, schema_hint);
     emit_pipeline(store.app(), "story_architect", "started", "Generating story bible and opening chapter");
     let raw = chat(store.app(), &settings, "story_architect", system, &architect_prompt).await?;
-    let parsed: InitialResponse = serde_json::from_str(clean_json(&raw)).map_err(|e| AppError::ModelResponse(format!("{}; raw model output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
+    let parsed: InitialResponse = parse_story_architect_response(&raw)
+        .map_err(|e| AppError::ModelResponse(format!("{}; raw model output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
     validate_initial_response(&parsed)?;
     let story_id = Uuid::new_v4().to_string();
     let mut characters = Vec::with_capacity(parsed.characters.len());
@@ -2465,6 +2504,44 @@ mod tests {
 
         let top_level = json!({"thinking":"still thinking"});
         assert_eq!(extract_stream_reasoning(&top_level), Some("still thinking"));
+    }
+
+    #[test]
+    fn story_architect_parser_accepts_numeric_values_for_string_fields() {
+        let raw = r#"{
+            "title":"Test",
+            "metadata":{"genre":["Fantasy"],"tags":["Magic"],"demographic":"General Audience","content_rating":"PG-13","tone":["Epic"],"source_type":"","source_title":"","inspirations":[]},
+            "premise":"A test premise",
+            "central_conflict":"A test conflict",
+            "themes":["identity"],
+            "world_setting":"A test world",
+            "world_rules":["magic"],
+            "locations":["Tower"],
+            "characters":[{
+                "name":"Hero",
+                "role":1.5,
+                "personality":["calm"],
+                "appearance":"tall",
+                "clothing":"coat",
+                "motivations":["survive"]
+            }],
+            "relationships":[],
+            "open_threads":[],
+            "introduction":"Intro",
+            "chapter":{
+                "title":"Chapter 1",
+                "summary":"Summary",
+                "text":"Text",
+                "events":[],
+                "continuity_updates":[],
+                "character_state_updates":[],
+                "relationship_updates":[],
+                "open_threads":[]
+            }
+        }"#;
+
+        let parsed = parse_story_architect_response(raw).expect("numeric string compatibility should parse");
+        assert_eq!(parsed.characters[0].role, "1.5");
     }
 
     #[test]
