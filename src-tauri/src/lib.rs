@@ -617,6 +617,8 @@ fn emit_llm_error(app: &AppHandle, generation_id: &str, stage: &str, model: &str
         model: model.to_string(),
         system_prompt: None,
         user_prompt: None,
+        thinking_delta: None,
+        thinking: None,
         delta: None,
         response,
         error: Some(message),
