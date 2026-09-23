@@ -218,9 +218,11 @@ fn is_generic_research_subject(subject: &str) -> bool {
 
     !has_proper_name
         && words.len() <= 4
-        && words
-            .iter()
-            .any(|word| generic_role_words.contains(&word.to_ascii_lowercase().as_str()))
+        && words.iter().any(|word| {
+            generic_role_words
+                .iter()
+                .any(|role| role.eq_ignore_ascii_case(word))
+        })
 }
 
 fn add_named_runs(subjects: &mut Vec<String>, prompt: &str) {
