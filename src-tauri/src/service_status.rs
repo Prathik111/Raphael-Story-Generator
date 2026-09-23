@@ -27,7 +27,7 @@ pub struct ServiceStatusBoard {
 // Live health is derived from real endpoint probes.
 pub async fn probe(registry: &RegistryState, settings: &AppSettings) -> ServiceStatusBoard {
     let registry_future = registry.status();
-    let searx_future = research::check_search_api(settings);
+    let searx_future = research::check_search_gateway(settings);
     let comfy_future = comfyui::detect_api_url(&settings.comfyui_url);
     let (registry_status, searx_result, comfy_result) =
         tokio::join!(registry_future, searx_future, comfy_future);
@@ -50,7 +50,7 @@ pub async fn probe(registry: &RegistryState, settings: &AppSettings) -> ServiceS
             url: settings.web_search_url.clone(),
             detail: Some(
                 if settings.web_research_enabled {
-                    "SearXNG search API responded successfully.".into()
+                    "SearXNG local gateway is reachable; engine availability is checked when research actually runs.".into()
                 } else {
                     "SearXNG API is online; private research is disabled in settings.".into()
                 },
