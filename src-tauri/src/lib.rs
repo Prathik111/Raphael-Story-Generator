@@ -734,42 +734,50 @@ async fn chat(
         return Err(AppError::Llm(message));
     }
 
-    fn extract_content(value: &Value) -> Option<String> {
-        let content = value
-            .get("choices")
-            .and_then(|v| v.get(0))
-            .and_then(|choice| {
-                choice
-                    .get("delta")
-                    .and_then(|delta| delta.get("content"))
-                    .or_else(|| {
-                        choice
-                            .get("message")
-                            .and_then(|message| message.get("content"))
-                    })
-                    .or_else(|| choice.get("text"))
-            })?;
-
-        if let Some(text) = content.as_str() {
+    fn value_text(value: &Value) -> Option<String> {
+        if let Some(text) = value.as_str() {
             return (!text.is_empty()).then(|| text.to_string());
         }
 
-        if let Some(parts) = content.as_array() {
+        if let Some(parts) = value.as_array() {
             let text = parts
                 .iter()
                 .filter_map(|part| {
                     part.get("text")
                         .and_then(Value::as_str)
                         .or_else(|| part.get("content").and_then(Value::as_str))
+                        .or_else(|| part.get("value").and_then(Value::as_str))
                 })
                 .collect::<String>();
-
             if !text.is_empty() {
                 return Some(text);
             }
         }
 
         None
+    }
+
+    fn extract_content(value: &Value) -> Option<String> {
+        let candidates = [
+            value.get("choices")
+                .and_then(|v| v.get(0))
+                .and_then(|choice| choice.get("delta"))
+                .and_then(|delta| delta.get("content")),
+            value.get("choices")
+                .and_then(|v| v.get(0))
+                .and_then(|choice| choice.get("message"))
+                .and_then(|message| message.get("content")),
+            value.get("choices")
+                .and_then(|v| v.get(0))
+                .and_then(|choice| choice.get("text")),
+            value.get("message").and_then(|message| message.get("content")),
+            value.get("output_text"),
+            value.get("response"),
+            value.get("content"),
+            value.get("text"),
+        ];
+
+        candidates.into_iter().flatten().find_map(value_text)
     }
 
     fn extract_reasoning(value: &Value) -> Option<&str> {
@@ -1389,25 +1397,31 @@ async fn create_story(
 
     if settings.llm_model.trim().is_empty() { return Err(AppError::Llm("configure an LLM model in settings".into())); }
 
+    let research_query = research::research_query_from_prompt(&prompt);
     let research_bundle = if settings.web_research_enabled {
-        emit_pipeline(store.app(), "web_gateway", "started", "Ensuring the private web research gateway is running");
-        privacy_gateway::ensure_started_with_settings(store.app(), &settings).await?;
-        emit_pipeline(store.app(), "web_gateway", "completed", "Private web research gateway is ready");
-        emit_pipeline(store.app(), "web_research", "started", "Searching the web through the private local research gateway");
-        match research::research_web(store.app(), &settings, &prompt).await {
-            Ok(bundle) => {
-                emit_pipeline(
-                    store.app(),
-                    "web_research",
-                    "completed",
-                    format!("Extracted {} source-backed fact(s) from {} source page(s)", bundle.facts.len(), bundle.sources.len()),
-                );
-                bundle
+        if let Some(query) = research_query.as_deref() {
+            emit_pipeline(store.app(), "web_research", "started", format!("Research requested for explicit story subject(s): {query}"));
+            emit_pipeline(store.app(), "web_gateway", "started", "Ensuring the private web research gateway is running");
+            privacy_gateway::ensure_started_with_settings(store.app(), &settings).await?;
+            emit_pipeline(store.app(), "web_gateway", "completed", "Private web research gateway is ready");
+            match research::research_web(store.app(), &settings, query).await {
+                Ok(bundle) => {
+                    emit_pipeline(
+                        store.app(),
+                        "web_research",
+                        "completed",
+                        format!("Extracted {} source-backed fact(s) from {} usable source(s)", bundle.facts.len(), bundle.sources.len()),
+                    );
+                    bundle
+                }
+                Err(error) => {
+                    emit_pipeline(store.app(), "web_research", "error", error.to_string());
+                    return Err(error);
+                }
             }
-            Err(error) => {
-                emit_pipeline(store.app(), "web_research", "error", error.to_string());
-                return Err(error);
-            }
+        } else {
+            emit_pipeline(store.app(), "web_research", "skipped", "No explicit external character, series, world, or other research subject was found in the prompt; generating without web research");
+            ResearchBundle::default()
         }
     } else {
         ResearchBundle::default()
