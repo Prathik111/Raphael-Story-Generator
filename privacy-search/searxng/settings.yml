@@ -30,11 +30,12 @@ search:
     - json
 
 outgoing:
-  request_timeout: 8.0
-  max_request_timeout: 15.0
+  request_timeout: 15.0
+  max_request_timeout: 30.0
+  extra_proxy_timeout: 10.0
   useragent_suffix: ""
   pool_connections: 16
-  enable_http2: true
+  enable_http2: false
   using_tor_proxy: true
   proxies:
     all://:
