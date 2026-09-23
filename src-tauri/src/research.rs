@@ -194,6 +194,7 @@ fn add_named_runs(subjects: &mut Vec<String>, prompt: &str) {
         "Build", "Let", "Can", "Could", "Would", "Should", "Have", "Has", "The",
         "This", "That", "Here", "Now", "Story", "Chapter", "Episode", "Scene",
         "Random", "Original", "New", "Main", "Character", "Characters",
+        "Anime", "Manga", "Game", "Series", "Show", "Movie", "Book",
     ];
 
     for capture in regex.find_iter(prompt) {
@@ -252,9 +253,7 @@ pub fn research_query_from_prompt(prompt: &str) -> Option<String> {
         "starring",
     ];
     let has_external_cue = external_cues.iter().any(|cue| lower.contains(cue));
-    if has_external_cue || !subjects.is_empty() {
-        add_named_runs(&mut subjects, prompt);
-    }
+    add_named_runs(&mut subjects, prompt);
 
     let story_pattern = regex::Regex::new(
         r"\b([A-Z][A-Za-z0-9_-]{2,30}(?:\s+[A-Z][A-Za-z0-9_-]{2,30}){0,4})\s+(?i:story|fanfic|fanfiction)\b",
