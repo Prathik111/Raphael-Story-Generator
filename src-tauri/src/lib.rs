@@ -582,6 +582,8 @@ struct LlmGenerationEvent {
     model: String,
     system_prompt: Option<String>,
     user_prompt: Option<String>,
+    thinking_delta: Option<String>,
+    thinking: Option<String>,
     delta: Option<String>,
     response: Option<String>,
     error: Option<String>,
@@ -645,6 +647,8 @@ async fn chat(
         model: settings.llm_model.trim().into(),
         system_prompt: Some(system.to_string()),
         user_prompt: Some(user.to_string()),
+        thinking_delta: None,
+        thinking: Some(String::new()),
         delta: None,
         response: Some(String::new()),
         error: None,
@@ -660,12 +664,11 @@ async fn chat(
         ]
     });
 
-    // Raphael's generation stages all require a final structured answer.
-    // Ollama's OpenAI-compatible endpoint can otherwise spend the entire stream
-    // in the reasoning channel, leaving delta.content empty.
+    // Request a visible provider-emitted reasoning stream for thinking-capable
+    // Ollama models. The final answer remains in delta.content/message.content.
     let lower_base = base.to_ascii_lowercase();
     if lower_base.contains("11434") || lower_base.contains("ollama") {
-        body["reasoning_effort"] = json!("none");
+        body["reasoning_effort"] = json!("medium");
     }
 
     let mut req = client
@@ -823,14 +826,28 @@ async fn chat(
                 model: settings.llm_model.trim().into(),
                 system_prompt: None,
                 user_prompt: None,
+                thinking_delta: None,
+                thinking: None,
                 delta: Some(text),
                 response: None,
                 error: None,
             });
         } else if let Some(reasoning) = extract_reasoning(&value) {
-            // Keep reasoning private. We only retain it as an internal fallback
-            // for providers that put the structured answer in the reasoning field.
             reasoning_response.push_str(reasoning);
+
+            emit_llm(app, LlmGenerationEvent {
+                generation_id: token_generation_id.clone(),
+                stage: stage.into(),
+                status: "token".into(),
+                model: settings.llm_model.trim().into(),
+                system_prompt: None,
+                user_prompt: None,
+                thinking_delta: Some(reasoning.to_string()),
+                thinking: Some(reasoning_response.clone()),
+                delta: None,
+                response: None,
+                error: None,
+            });
         }
     };
 
@@ -934,6 +951,8 @@ async fn chat(
         model: settings.llm_model.trim().into(),
         system_prompt: None,
         user_prompt: None,
+        thinking_delta: None,
+        thinking: Some(reasoning_response.clone()),
         delta: None,
         response: Some(full_response.clone()),
         error: None,
