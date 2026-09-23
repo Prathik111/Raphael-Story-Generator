@@ -741,23 +741,41 @@ pub fn story_architect_context(bundle: &ResearchBundle) -> String {
         return "WEB RESEARCH:\nNo external research was performed.".into();
     }
 
-    let sources = bundle
-        .sources
-        .iter()
-        .map(|source| {
-            format!(
-                "[{}] {} — {}
-SEARCH SNIPPET: {}",
-                source.id, source.title, source.url, source.snippet
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let facts = research_prompt(bundle);
+    let mut sources = Vec::new();
+    let mut remaining = 30_000usize;
+
+    for source in &bundle.sources {
+        if remaining < 250 {
+            break;
+        }
+
+        let excerpt_budget = if source.content.trim().is_empty() {
+            remaining.min(1_500)
+        } else {
+            remaining.min(3_500)
+        };
+        let excerpt = if source.content.trim().is_empty() {
+            source.snippet.clone()
+        } else {
+            trim_chars(&source.content, excerpt_budget)
+        };
+        let block = format!(
+            "[{}] {} — {}\nSEARCH SNIPPET: {}\nSOURCE EXCERPT:\n{}",
+            source.id, source.title, source.url, source.snippet, excerpt
+        );
+
+        if block.chars().count() > remaining {
+            break;
+        }
+        remaining = remaining.saturating_sub(block.chars().count() + 2);
+        sources.push(block);
+    }
 
     format!(
         "WEB RESEARCH FACTS:\n{}\n\nWEB RESEARCH SOURCES:\n{}",
-        research_prompt(bundle),
-        sources
+        if facts.trim().is_empty() { "No validated source-backed facts were extracted." } else { &facts },
+        sources.join("\n\n")
     )
 }
 
