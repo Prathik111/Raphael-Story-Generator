@@ -817,24 +817,7 @@ async fn chat(
             return;
         };
 
-        if let Some(text) = extract_content(&value) {
-            parsed_any = true;
-            full_response.push_str(&text);
-
-            emit_llm(app, LlmGenerationEvent {
-                generation_id: token_generation_id.clone(),
-                stage: stage.into(),
-                status: "token".into(),
-                model: settings.llm_model.trim().into(),
-                system_prompt: None,
-                user_prompt: None,
-                thinking_delta: None,
-                thinking: None,
-                delta: Some(text),
-                response: None,
-                error: None,
-            });
-        } else if let Some(reasoning) = extract_reasoning(&value) {
+        if let Some(reasoning) = extract_reasoning(&value) {
             reasoning_response.push_str(reasoning);
 
             emit_llm(app, LlmGenerationEvent {
@@ -847,6 +830,25 @@ async fn chat(
                 thinking_delta: Some(reasoning.to_string()),
                 thinking: Some(reasoning_response.clone()),
                 delta: None,
+                response: None,
+                error: None,
+            });
+        }
+
+        if let Some(text) = extract_content(&value) {
+            parsed_any = true;
+            full_response.push_str(&text);
+
+            emit_llm(app, LlmGenerationEvent {
+                generation_id: token_generation_id.clone(),
+                stage: stage.into(),
+                status: "token".into(),
+                model: settings.llm_model.trim().into(),
+                system_prompt: None,
+                user_prompt: None,
+                thinking_delta: None,
+                thinking: Some(reasoning_response.clone()),
+                delta: Some(text),
                 response: None,
                 error: None,
             });
