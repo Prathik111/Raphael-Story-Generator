@@ -914,7 +914,7 @@ export default function App() {
     if (!story || busy) return;
     setBusy(true);
     setError(null);
-    const traceId = appendLocalPipelineEvent('generation', 'started', \`Chapter generation started — preparing Chapter \${story.chapters.length + 1}…\`);
+    const traceId = appendLocalPipelineEvent('generation', 'started', `Chapter generation started — preparing Chapter ${story.chapters.length + 1}…`);
     try {
       const next = await api.generateNextChapter(story.id, directive.trim());
       setStory(next);
