@@ -966,13 +966,71 @@ async fn chat(
 }
 
 fn clean_json(raw: &str) -> &str {
-    let trimmed = raw.trim();
-    if trimmed.starts_with('{') { return trimmed; }
-    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
-        if start < end { return &trimmed[start..=end]; }
+    let trimmed = raw
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```JSON")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    if trimmed.starts_with('{') && trimmed.ends_with('}') {
+        if serde_json::from_str::<Value>(trimmed).is_ok() {
+            return trimmed;
+        }
     }
+
+    let chars: Vec<char> = trimmed.chars().collect();
+    let mut start_index = None;
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (index, ch) in chars.iter().enumerate() {
+        if start_index.is_none() {
+            if *ch == '{' {
+                start_index = Some(index);
+                depth = 1;
+            }
+            continue;
+        }
+
+        if escaped {
+            escaped = false;
+            continue;
+        }
+
+        if in_string {
+            if *ch == '\\' {
+                escaped = true;
+            } else if *ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match *ch {
+            '"' => in_string = true,
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    let start = start_index.unwrap_or(index);
+                    let candidate: String = chars[start..=index].iter().collect();
+                    if serde_json::from_str::<Value>(&candidate).is_ok() {
+                        let offset = trimmed.find(&candidate).unwrap_or(0);
+                        return &trimmed[offset..offset + candidate.len()];
+                    }
+                    start_index = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
     trimmed
 }
+
 fn validate_initial_response(parsed: &InitialResponse) -> AppResult<()> {
     if parsed.title.trim().is_empty() {
         return Err(AppError::ModelResponse("generated story title is empty".into()));
