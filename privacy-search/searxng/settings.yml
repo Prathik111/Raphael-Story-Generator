@@ -1,4 +1,15 @@
-use_default_settings: true
+use_default_settings:
+  engines:
+    keep_only:
+      - brave
+      - duckduckgo
+      - google cse
+      - wikipedia
+      - wikidata
+      - reuters
+      - arxiv
+      - pubmed
+
 
 general:
   debug: false
