@@ -79,6 +79,81 @@ struct ExtractedResearch {
     facts: Vec<ResearchFact>,
 }
 
+pub fn research_query_from_prompt(prompt: &str) -> Option<String> {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return None;
+    }
+
+    let lower = prompt.to_ascii_lowercase();
+    let random_markers = [
+        "random story",
+        "random anime story",
+        "random manga story",
+        "something random",
+        "make something up",
+        "surprise me",
+        "anything is fine",
+        "anything you want",
+        "any story",
+        "an original story",
+        "original story",
+        "completely original",
+    ];
+    if random_markers.iter().any(|marker| lower.contains(marker)) {
+        return None;
+    }
+
+    let mut subjects = Vec::<String>::new();
+    let patterns = [
+        r"(?i)\b(?:based on|inspired by|featuring|starring|with characters from|characters from|set in the world of|from the world of)\s+([^.!?\n]+)",
+        r"(?i)\b(?:about|using)\s+([A-Za-z0-9][^.!?\n]+?)\s+(?:story|fanfic|fanfiction|character|characters|series|anime|manga|game)\b",
+        r"(?i)^\s*([A-Z][A-Za-z0-9_-]{1,30}(?:\s+[A-Z][A-Za-z0-9_-]{1,30}){0,4})\s+(?:story|fanfic|fanfiction)\b",
+    ];
+
+    for pattern in patterns {
+        let Ok(regex) = regex::Regex::new(pattern) else { continue; };
+        for captures in regex.captures_iter(prompt) {
+            let Some(value) = captures.get(1) else { continue; };
+            let mut subject = value.as_str().trim().to_string();
+
+            for separator in [
+                " where ", " while ", " when ", " and then ", " and write ",
+                " and make ", " that has ", " who is ", " with a scene ",
+            ] {
+                if let Some(index) = subject.to_ascii_lowercase().find(separator) {
+                    subject.truncate(index);
+                }
+            }
+
+            subject = subject
+                .trim_matches(|c: char| c == ',' || c == ':' || c == ';' || c == '-' || c == ' ')
+                .trim()
+                .to_string();
+
+            let lower_subject = subject.to_ascii_lowercase();
+            if subject.is_empty()
+                || matches!(lower_subject.as_str(), "a dragon" | "a hero" | "a character" | "characters" | "someone" | "something")
+            {
+                continue;
+            }
+
+            if subject.split_whitespace().count() <= 12 {
+                subjects.push(subject);
+            }
+        }
+    }
+
+    subjects.sort();
+    subjects.dedup();
+
+    if subjects.is_empty() {
+        return None;
+    }
+
+    Some(subjects.join(" | "))
+}
+
 fn repair_model_json(raw: &str) -> String {
     let mut value = crate::clean_json(raw).trim().to_string();
 
