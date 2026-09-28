@@ -46,7 +46,10 @@ pub struct RegistryModelDto {
 #[derive(Debug, Clone)]
 pub struct RegistryModelArtifact {
     pub id: String,
+    pub version_id: Option<String>,
+    pub file_id: String,
     pub file_name: String,
+    pub sha256: Option<String>,
     pub activation_prompts: Vec<String>,
 }
 
@@ -360,7 +363,10 @@ impl RegistryState {
 
         Ok(RegistryModelArtifact {
             id: model.id,
+            version_id: latest_version.as_ref().map(|version| version.id.clone()),
+            file_id: file.id,
             file_name: file.filename,
+            sha256: file.sha256,
             activation_prompts,
         })
     }
