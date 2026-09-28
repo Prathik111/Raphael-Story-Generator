@@ -222,6 +222,12 @@ pub struct VisualStyleLora {
     pub name: String,
     pub weight: f32,
     pub file_name: String,
+    #[serde(default)]
+    pub version_id: Option<String>,
+    #[serde(default)]
+    pub file_id: Option<String>,
+    #[serde(default)]
+    pub sha256: Option<String>,
     pub activation_prompts: Vec<String>,
 }
 
@@ -231,6 +237,12 @@ pub struct StoryVisualConfig {
     pub checkpoint_id: String,
     pub checkpoint_name: String,
     pub checkpoint_file_name: String,
+    #[serde(default)]
+    pub checkpoint_version_id: Option<String>,
+    #[serde(default)]
+    pub checkpoint_file_id: Option<String>,
+    #[serde(default)]
+    pub checkpoint_sha256: Option<String>,
     pub style_loras: Vec<VisualStyleLora>,
 }
 
@@ -243,6 +255,12 @@ pub struct SceneLoraSelection {
     pub character: Option<String>,
     pub weight: f32,
     pub file_name: String,
+    #[serde(default)]
+    pub version_id: Option<String>,
+    #[serde(default)]
+    pub file_id: Option<String>,
+    #[serde(default)]
+    pub sha256: Option<String>,
     pub activation_prompts: Vec<String>,
     pub reason: String,
 }
@@ -1680,6 +1698,9 @@ async fn create_story(
             name: model.name,
             weight: 0.75,
             file_name: artifact.file_name,
+            version_id: artifact.version_id.clone(),
+            file_id: Some(artifact.file_id.clone()),
+            sha256: artifact.sha256.clone(),
             activation_prompts: artifact.activation_prompts,
         });
     }
@@ -1689,11 +1710,17 @@ async fn create_story(
         checkpoint_id: checkpoint.id.clone(),
         checkpoint_name: checkpoint.name.clone(),
         checkpoint_file_name: checkpoint_artifact.file_name.clone(),
+        checkpoint_version_id: checkpoint_artifact.version_id.clone(),
+        checkpoint_file_id: Some(checkpoint_artifact.file_id.clone()),
+        checkpoint_sha256: checkpoint_artifact.sha256.clone(),
         style_loras,
     };
     let style_artifacts = visual_config.style_loras.iter().map(|item| registry::RegistryModelArtifact {
         id: item.id.clone(),
+        version_id: item.version_id.clone(),
+        file_id: item.file_id.clone().unwrap_or_default(),
         file_name: item.file_name.clone(),
+        sha256: item.sha256.clone(),
         activation_prompts: item.activation_prompts.clone(),
     }).collect::<Vec<_>>();
     validate_visual_setup(&visual_config, &checkpoint_artifact, &style_artifacts)?;
@@ -2308,6 +2335,9 @@ Return:
             character: canonical_character,
             weight,
             file_name: artifact.file_name,
+            version_id: artifact.version_id.clone(),
+            file_id: Some(artifact.file_id.clone()),
+            sha256: artifact.sha256.clone(),
             activation_prompts: artifact.activation_prompts,
             reason: draft.reason.trim().to_string(),
         });
