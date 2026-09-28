@@ -622,7 +622,9 @@ impl Store {
     }
     fn persist_settings(&self) -> AppResult<()> {
         let settings = self.settings.read().map_err(|e| AppError::Storage(e.to_string()))?.clone();
-        save_json(&self.root.join("settings.json"), &settings)
+        let mut persisted = settings;
+        persisted.llm_api_key.clear();
+        save_json(&self.root.join("settings.json"), &persisted)
     }
     fn persist_story(&self, story: &Story) -> AppResult<()> {
         save_json(&self.root.join("stories").join(format!("{}.json", story.id)), story)
