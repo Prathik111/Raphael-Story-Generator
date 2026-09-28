@@ -285,12 +285,40 @@ impl RegistryState {
 }
 
 impl RegistryState {
-    pub async fn compatible_loras(&self, checkpoint_id: &str) -> AppResult<Vec<RegistryLoraCandidate>> {
-        let client = self.client().await?;
-        let models = client
-            .compatible(checkpoint_id, Some(ModelType::Lora))
+    pub async fn compatible_models(&self, model_id: &str, model_type: Option<ModelType>) -> AppResult<Vec<registry_core::Model>> {
+        let mut url = format!("{}/api/v1/models/{}/compatibility", self.inner.base_url, model_id);
+        if let Some(model_type) = model_type {
+            url.push_str(&format!("?type={}", model_type));
+        }
+
+        let token = std::fs::read_to_string(&self.inner.token_path)
+            .map_err(|error| AppError::Registry(format!("failed to read Registry token: {error}")))?;
+        let response = self.inner.http
+            .get(url)
+            .bearer_auth(token.trim())
+            .header("x-raphael-actor", "story-generator")
+            .send()
             .await
-            .map_err(|error| AppError::Registry(format!("failed to load compatible LoRAs: {error}")))?;
+            .map_err(|error| AppError::Registry(format!("failed to query Registry compatibility: {error}")))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(AppError::Registry(format!("Registry compatibility query returned HTTP {status}: {body}")));
+        }
+
+        let result = response
+            .json::<registry_core::CompatibilityResult>()
+            .await
+            .map_err(|error| AppError::Registry(format!("invalid Registry compatibility response: {error}")))?;
+
+        Ok(result.candidates)
+    }
+
+    pub async fn compatible_loras(&self, checkpoint_id: &str) -> AppResult<Vec<RegistryLoraCandidate>> {
+        let models = self
+            .compatible_models(checkpoint_id, Some(ModelType::Lora))
+            .await?;
 
         let mut candidates = Vec::with_capacity(models.len());
         for model in models {
