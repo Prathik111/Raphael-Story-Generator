@@ -31,7 +31,7 @@ Chapter continuation is stateful. The optional user directive is passed only to 
 
 ## Private web research
 
-Story creation performs real web research before the Story Architect stage when **web research is enabled**. Raphael does not use a hosted search API or a public SearXNG instance. The desktop app only accepts a local SearXNG endpoint and, by default, requires a local SOCKS5/Tor proxy for all external search/source traffic.
+Story creation performs real web research before the Story Architect stage when **web research is enabled**. Raphael does not use a hosted search API or a public SearXNG instance. The desktop app only accepts a local SearXNG endpoint and, by default, requires a local SOCKS5/Tor proxy for all external search/source traffic. Registry model thumbnails and metadata are read from the Raphael Model Registry API; Story Generator does not read the Model Manager SQLite database.
 
 The repository includes a local privacy gateway under `privacy-search/`:
 
@@ -156,7 +156,7 @@ Automatic model/LoRA discovery from the Raphael Model Manager is handled through
 
 ## Local settings and secrets
 
-The optional LLM API key is stored in the application's local settings file and is not committed to the repository. Do not use a shared Windows account for credentials you need to keep private.
+The optional LLM API key is stored in the operating system credential store (Windows Credential Manager) and is never written to the application's JSON settings file. Raphael keeps only non-secret configuration in local settings. Do not use a shared Windows account for credentials you need to keep private.
 
 
 ## Image generation lifecycle
