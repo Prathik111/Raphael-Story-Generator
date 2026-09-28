@@ -316,6 +316,7 @@ impl RegistryState {
     }
 
     pub async fn compatible_loras(&self, checkpoint_id: &str) -> AppResult<Vec<RegistryLoraCandidate>> {
+        let client = self.client().await?;
         let models = self
             .compatible_models(checkpoint_id, Some(ModelType::Lora))
             .await?;
