@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::{collections::HashMap, env, fs, path::{Path, PathBuf}, sync::RwLock};
+use keyring::Entry;
 use tauri::{AppHandle, Emitter, Manager, State};
 use thiserror::Error;
 use uuid::Uuid;
@@ -72,6 +73,9 @@ Do not select style LoRAs. Do not select the same LoRA twice. Do not invent IDs.
 Only choose IDs from the supplied candidate lists.
 If no candidate genuinely matches a slot, omit that slot.
 Return ONLY valid JSON."#;
+
+const KEYRING_SERVICE: &str = "com.raphael.storygenerator";
+const KEYRING_USER: &str = "llm-api-key";
 
 const DEFAULT_IMAGE_PROMPT_SYSTEM_PROMPT: &str = r#"You are Raphael's scene image prompt generator for a ComfyUI diffusion pipeline.
 
@@ -291,6 +295,8 @@ pub struct Story {
     pub source_prompt: String,
     #[serde(default)]
     pub research: research::ResearchBundle,
+    #[serde(default)]
+    pub revision: u64,
     pub metadata: StoryMetadata,
     #[serde(default)]
     pub visual_config: StoryVisualConfig,
@@ -549,13 +555,28 @@ impl Store {
         let root = data_dir.join("story-generator");
         fs::create_dir_all(root.join("stories")).map_err(|e| AppError::Storage(e.to_string()))?;
         let settings_path = root.join("settings.json");
-        let settings = if settings_path.exists() {
+        let mut settings = if settings_path.exists() {
             load_json::<AppSettings>(&settings_path).map_err(|e| {
                 AppError::Storage(format!("failed to load settings.json: {e}"))
             })?
         } else {
             AppSettings::default()
         };
+
+        if !settings.llm_api_key.trim().is_empty() {
+            let entry = Entry::new(KEYRING_SERVICE, KEYRING_USER)
+                .map_err(|e| AppError::Storage(format!("failed to access OS credential store: {e}")))?;
+            entry.set_password(settings.llm_api_key.trim())
+                .map_err(|e| AppError::Storage(format!("failed to migrate stored LLM API key to OS credential store: {e}")))?;
+            settings.llm_api_key.clear();
+            save_json(&settings_path, &settings)?;
+        } else if let Ok(entry) = Entry::new(KEYRING_SERVICE, KEYRING_USER) {
+            match entry.get_password() {
+                Ok(secret) => settings.llm_api_key = secret,
+                Err(keyring::Error::NoEntry) => {}
+                Err(error) => return Err(AppError::Storage(format!("failed to load LLM API key from OS credential store: {error}"))),
+            }
+        }
 
         let mut data = StoreData::default();
         let entries = fs::read_dir(root.join("stories"))
@@ -572,6 +593,10 @@ impl Store {
                 AppError::Storage(format!("failed to load story file {}: {e}", path.display()))
             })?;
             validate_story_identity(&story)?;
+            let mut story = story;
+            if story.revision == 0 {
+                story.revision = 1;
+            }
             data.stories.insert(story.id.clone(), story);
         }
 
@@ -1521,10 +1546,22 @@ fn require_story(store: &Store, id: &str) -> AppResult<Story> {
     let data = store.data.read().map_err(|e| AppError::Storage(e.to_string()))?;
     data.stories.get(id).cloned().ok_or_else(|| AppError::StoryNotFound(id.into()))
 }
-fn write_story(store: &Store, story: Story) -> AppResult<Story> {
+fn write_story(store: &Store, mut story: Story) -> AppResult<Story> {
     validate_story_identity(&story)?;
+    let mut data = store.data.write().map_err(|e| AppError::Storage(e.to_string()))?;
+    if let Some(current) = data.stories.get(&story.id) {
+        if current.revision != story.revision {
+            return Err(AppError::Storage(format!(
+                "story '{}' changed while this operation was running; refusing to overwrite newer state",
+                story.id
+            )));
+        }
+        story.revision = current.revision.saturating_add(1);
+    } else {
+        story.revision = 1;
+    }
     store.persist_story(&story)?;
-    store.data.write().map_err(|e| AppError::Storage(e.to_string()))?.stories.insert(story.id.clone(), story.clone());
+    data.stories.insert(story.id.clone(), story.clone());
     Ok(story)
 }
 fn build_summaries(data: &StoreData) -> Vec<StorySummary> {
@@ -1535,6 +1572,24 @@ fn build_summaries(data: &StoreData) -> Vec<StorySummary> {
     result.sort_by(|a,b| b.updated_at.cmp(&a.updated_at));
     result
 }
+fn llm_keyring_entry() -> AppResult<Entry> {
+    Entry::new(KEYRING_SERVICE, KEYRING_USER)
+        .map_err(|error| AppError::Storage(format!("failed to access OS credential store: {error}")))
+}
+
+fn save_llm_api_key(secret: &str) -> AppResult<()> {
+    let entry = llm_keyring_entry()?;
+    if secret.trim().is_empty() {
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(AppError::Storage(format!("failed to clear LLM API key: {error}"))),
+        }
+    } else {
+        entry.set_password(secret.trim())
+            .map_err(|error| AppError::Storage(format!("failed to store LLM API key in OS credential store: {error}")))
+    }
+}
+
 #[tauri::command]
 fn redacted_settings(settings: &AppSettings) -> AppSettings {
     let mut redacted = settings.clone();
@@ -1562,25 +1617,30 @@ fn get_settings(store: State<'_, Store>) -> AppResult<AppSettings> {
 }
 #[tauri::command]
 fn save_settings(mut settings: AppSettings, store: State<'_, Store>) -> AppResult<AppSettings> {
-    {
-        let current = store.settings.read().map_err(|e| AppError::Storage(e.to_string()))?;
-        if settings.llm_api_key.trim().is_empty() {
-            settings.llm_api_key = current.llm_api_key.clone();
-        }
+    let current_key = store.settings.read()
+        .map_err(|e| AppError::Storage(e.to_string()))?
+        .llm_api_key.clone();
+    if settings.llm_api_key.trim().is_empty() {
+        settings.llm_api_key = current_key;
+    } else {
+        save_llm_api_key(&settings.llm_api_key)?;
     }
     validate_settings(&settings)?;
     *store.settings.write().map_err(|e| AppError::Storage(e.to_string()))? = settings.clone();
-    store.persist_settings()?;
+    let mut persisted = settings.clone();
+    persisted.llm_api_key.clear();
+    save_json(&store.root.join("settings.json"), &persisted)?;
     Ok(redacted_settings(&settings))
 }
 
 #[tauri::command]
 fn clear_llm_api_key(store: State<'_, Store>) -> AppResult<String> {
-    {
-        let mut settings = store.settings.write().map_err(|e| AppError::Storage(e.to_string()))?;
-        settings.llm_api_key.clear();
-    }
-    store.persist_settings()?;
+    save_llm_api_key("")?;
+    let mut settings = store.settings.write().map_err(|e| AppError::Storage(e.to_string()))?;
+    settings.llm_api_key.clear();
+    let mut persisted = settings.clone();
+    persisted.llm_api_key.clear();
+    save_json(&store.root.join("settings.json"), &persisted)?;
     Ok("Stored LLM API key cleared.".into())
 }
 #[tauri::command]
@@ -1783,6 +1843,7 @@ Return the JSON shape above.", prompt.trim(), research_context, schema_hint);
             open_threads: parsed.open_threads.into_iter().chain(parsed.chapter.open_threads).collect(),
             continuity_notes: parsed.chapter.continuity_updates.clone(),
         },
+        revision: 0,
         chapters: vec![chapter], created_at: created.clone(), updated_at: created,
     };
     write_story(&store, story)
@@ -1844,6 +1905,7 @@ Return this JSON shape:
     let raw = chat(store.app(), &settings, "continuity_writer", system, &user).await?;
     let parsed: ChapterDraft = serde_json::from_str(clean_json(&raw)).map_err(|e| AppError::ModelResponse(format!("{}; raw model output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
     validate_chapter_draft(&parsed, next_number)?;
+    story = require_story(&store, &story_id)?;
     for update in parsed.character_state_updates.iter() {
         if let Some(character) = story.bible.characters.iter_mut().find(|c| {
             c.id == update.character_id || normalize_name(&c.name) == normalize_name(&update.character_id)
@@ -1943,7 +2005,11 @@ Return:
         composition: scene.composition, dialogue: scene.dialogue, positive_prompt: String::new(),
         negative_prompt: String::new(), selected_loras: Vec::new(), image_status: "not_ready".into(), image_url: None, image_path: None, image_mime: None, image_error: None, image_width: 1024, image_height: 1024, comfy_prompt_id: None,
     }).collect::<Vec<_>>();
-    story.chapters[chapter_index].scenes = scenes.clone(); story.updated_at = now(); write_story(&store, story)?;
+    story = require_story(&store, &story_id)?;
+    let chapter_index = story.chapters.iter().position(|c| c.number == chapter_number).ok_or_else(|| AppError::ModelResponse("chapter disappeared while saving extracted scenes".into()))?;
+    story.chapters[chapter_index].scenes = scenes.clone();
+    story.updated_at = now();
+    write_story(&store, story)?;
     Ok(SceneExtractionResult { chapter_number, scenes })
 }
 #[tauri::command]
@@ -2053,6 +2119,7 @@ Return:
         if parsed.image_width == 0 { 1024 } else { parsed.image_width },
         if parsed.image_height == 0 { 1024 } else { parsed.image_height },
     )?;
+    story = require_story(&store, &story_id)?;
     let chapter_mut = story.chapters.iter_mut().find(|c| c.number == chapter_number)
         .ok_or_else(|| AppError::ModelResponse("chapter disappeared while saving scene prompt".into()))?;
     let scene_mut = chapter_mut.scenes.iter_mut().find(|s| s.id == scene_id)
@@ -2369,6 +2436,7 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
         ));
     }
     let prompt_id = value.get("prompt_id").and_then(Value::as_str).unwrap_or(&requested_prompt_id).to_string();
+    story = require_story(&store, &story_id)?;
     let chapter_mut = story.chapters.iter_mut().find(|c| c.number == chapter_number)
         .ok_or_else(|| AppError::ComfyUi("chapter disappeared while updating image status".into()))?;
     let scene_mut = chapter_mut.scenes.iter_mut().find(|s| s.id == scene_id)
@@ -2430,141 +2498,32 @@ fn get_scene_image(
     Ok(Some(format!("data:{mime};base64,{encoded}")))
 }
 
-fn model_manager_app_data_candidates() -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-
-    if let Some(value) = env::var_os("RAPHAEL_MODEL_MANAGER_APP_DATA_DIR") {
-        candidates.push(PathBuf::from(value));
-    }
-
-    if let Some(value) = env::var_os("APPDATA") {
-        candidates.push(PathBuf::from(value).join("com.raphael.modelmanager"));
-    }
-
-    if let Some(value) = env::var_os("LOCALAPPDATA") {
-        candidates.push(PathBuf::from(value).join("com.raphael.modelmanager"));
-    }
-
-    if let Some(base_dirs) = directories::BaseDirs::new() {
-        candidates.push(base_dirs.data_dir().join("com.raphael.modelmanager"));
-    }
-
-    candidates
-}
-
-fn model_manager_cache_path(app_data: &Path, connection: &rusqlite::Connection) -> PathBuf {
-    connection
-        .query_row(
-            "SELECT value FROM settings WHERE key='cache_location'",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .unwrap_or_else(|| app_data.join("cache"))
-}
-
-fn cached_model_thumbnail(registry_model_id: &str) -> AppResult<Option<String>> {
-    let registry_model_id = registry_model_id.trim();
-    if registry_model_id.is_empty() {
-        return Ok(None);
-    }
-
-    for app_data in model_manager_app_data_candidates() {
-        let db_path = app_data.join("raphael.db");
-        if !db_path.is_file() {
-            continue;
-        }
-
-        let connection = match rusqlite::Connection::open_with_flags(
-            &db_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        ) {
-            Ok(connection) => connection,
-            Err(_) => continue,
-        };
-
-        let cached_path = match connection.query_row(
-            "SELECT COALESCE(NULLIF(thumbnail_path, ''), NULLIF(cover_path, ''))
-             FROM models
-             WHERE registry_model_id = ?1
-             LIMIT 1",
-            [registry_model_id],
-            |row| row.get::<_, Option<String>>(0),
-        ) {
-            Ok(value) => value,
-            Err(rusqlite::Error::QueryReturnedNoRows) => continue,
-            Err(_) => continue,
-        };
-
-        let Some(cached_path) = cached_path else {
-            continue;
-        };
-
-        let cache_root = model_manager_cache_path(&app_data, &connection);
-        let requested = PathBuf::from(&cached_path);
-        let requested = if requested.is_absolute() {
-            requested
-        } else {
-            cache_root.join(requested)
-        };
-
-        let canonical_root = cache_root
-            .canonicalize()
-            .unwrap_or_else(|_| cache_root.clone());
-        let canonical_path = match requested.canonicalize() {
-            Ok(path) => path,
-            Err(_) => continue,
-        };
-
-        if !canonical_path.starts_with(&canonical_root) || !canonical_path.is_file() {
-            continue;
-        }
-
-        let metadata = fs::metadata(&canonical_path)
-            .map_err(|error| AppError::Storage(format!("failed to inspect cached model thumbnail: {error}")))?;
-        if metadata.len() > 8 * 1024 * 1024 {
-            continue;
-        }
-
-        let mime = match canonical_path
-            .extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "jpg" | "jpeg" => "image/jpeg",
-            "png" => "image/png",
-            "webp" => "image/webp",
-            "gif" => "image/gif",
-            "avif" => "image/avif",
+#[tauri::command]
+async fn get_registry_model_thumbnails(
+    model_ids: Vec<String>,
+    registry: State<'_, registry::RegistryState>,
+) -> AppResult<HashMap<String, String>> {
+    let client = registry.client().await?;
+    let mut thumbnails = HashMap::new();
+    for model_id in model_ids.into_iter().filter(|value| !value.trim().is_empty()).take(500) {
+        let assets = client.assets(&model_id).await
+            .map_err(|error| AppError::Registry(format!("failed to load assets for model {model_id}: {error}")))?;
+        let asset = ["thumbnail", "cover", "preview"].iter()
+            .find_map(|kind| assets.iter().find(|asset| asset.kind.to_string() == *kind));
+        let Some(asset) = asset else { continue; };
+        let (content_type, bytes) = client.asset_content(&model_id, &asset.id).await
+            .map_err(|error| AppError::Registry(format!("failed to load image asset for model {model_id}: {error}")))?;
+        if bytes.len() > 8 * 1024 * 1024 { continue; }
+        let mime = match content_type.to_ascii_lowercase().as_str() {
+            value if value.contains("jpeg") => "image/jpeg",
+            value if value.contains("png") => "image/png",
+            value if value.contains("webp") => "image/webp",
+            value if value.contains("gif") => "image/gif",
+            value if value.contains("avif") => "image/avif",
             _ => continue,
         };
-
-        let bytes = fs::read(&canonical_path)
-            .map_err(|error| AppError::Storage(format!("failed to read cached model thumbnail: {error}")))?;
-        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-        return Ok(Some(format!("data:{mime};base64,{encoded}")));
+        thumbnails.insert(model_id, format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)));
     }
-
-    Ok(None)
-}
-
-#[tauri::command]
-fn get_registry_model_thumbnails(
-    model_ids: Vec<String>,
-) -> AppResult<HashMap<String, String>> {
-    let mut thumbnails = HashMap::new();
-
-    for model_id in model_ids.into_iter().filter(|value| !value.trim().is_empty()).take(500) {
-        if let Some(thumbnail) = cached_model_thumbnail(&model_id)? {
-            thumbnails.insert(model_id, thumbnail);
-        }
-    }
-
     Ok(thumbnails)
 }
 
