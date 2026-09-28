@@ -82,6 +82,29 @@ Web research settings include the local SearXNG URL, local Tor/SOCKS5 proxy, fai
 
 The top status strip and **Raphael Services** panel actively probe the configured Registry, SearXNG search API, and ComfyUI `/system_stats` endpoint. The UI reports CHECKING, ONLINE, OFFLINE, or DISABLED from those real API probes; these are not static labels.
 
+## LAN Model Registry
+
+By default, the Story Generator starts a local Model Registry on `127.0.0.1:43217`. A second PC on the same LAN must instead connect to the Registry running on the host PC.
+
+On the **host PC**, start the Registry with a LAN bind and an explicit shared token:
+
+~~~powershell
+$env:RAPHAEL_REGISTRY_BIND = "0.0.0.0"
+$env:RAPHAEL_REGISTRY_ALLOW_INSECURE_LAN = "true"
+$env:RAPHAEL_REGISTRY_AUTH_TOKEN = "<strong-random-shared-token>"
+raphael-registry server
+~~~
+
+Allow TCP port `43217` through the host Windows Firewall for the trusted LAN. On the **LAN PC**, configure Story Generator to use the host address and the same token before launching it:
+
+~~~powershell
+$env:RAPHAEL_REGISTRY_URL = "http://<HOST-LAN-IP>:43217"
+$env:RAPHAEL_REGISTRY_AUTH_TOKEN = "<strong-random-shared-token>"
+npm run tauri:dev
+~~~
+
+When `RAPHAEL_REGISTRY_URL` is set, Story Generator treats the Registry as remote and will **not** try to start a second local Registry. The same environment variables apply to packaged builds. The Registry uses bearer-token authentication; plain HTTP LAN mode should only be used on a trusted network, or replaced with a TLS/reverse-proxy setup for an untrusted network.
+
 ## Prerequisites
 
 For the full local production pipeline, Raphael currently expects:
