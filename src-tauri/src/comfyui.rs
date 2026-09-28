@@ -292,29 +292,41 @@ fn save_image(app: &AppHandle, story_id: &str, chapter_number: usize, scene_id: 
 
 fn set_scene_status(app: &AppHandle, story_id: &str, chapter_number: usize, scene_id: &str, status: &str, error: Option<String>) -> AppResult<()> {
     let store = app.state::<Store>();
-    let mut story = require_story(&store, story_id)?;
-    let chapter = story.chapters.iter_mut().find(|chapter| chapter.number == chapter_number).ok_or_else(|| AppError::ComfyUi("chapter disappeared while tracking generation".into()))?;
-    let scene = chapter.scenes.iter_mut().find(|scene| scene.id == scene_id).ok_or_else(|| AppError::ComfyUi("scene disappeared while tracking generation".into()))?;
-    scene.image_status = status.into();
-    scene.image_error = error;
-    story.updated_at = crate::now();
-    write_story(&store, story)?;
-    Ok(())
+    for attempt in 0..3 {
+        let mut story = require_story(&store, story_id)?;
+        let chapter = story.chapters.iter_mut().find(|chapter| chapter.number == chapter_number).ok_or_else(|| AppError::ComfyUi("chapter disappeared while tracking generation".into()))?;
+        let scene = chapter.scenes.iter_mut().find(|scene| scene.id == scene_id).ok_or_else(|| AppError::ComfyUi("scene disappeared while tracking generation".into()))?;
+        scene.image_status = status.into();
+        scene.image_error = error.clone();
+        story.updated_at = crate::now();
+        match write_story(&store, story) {
+            Ok(_) => return Ok(()),
+            Err(AppError::Storage(message)) if attempt < 2 && message.contains("changed while this operation was running") => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(AppError::Storage("failed to update scene status after concurrent changes".into()))
 }
 
 fn set_scene_generated(app: &AppHandle, story_id: &str, chapter_number: usize, scene_id: &str, image_path: String, image_mime: String, image_url: String) -> AppResult<()> {
     let store = app.state::<Store>();
-    let mut story = require_story(&store, story_id)?;
-    let chapter = story.chapters.iter_mut().find(|chapter| chapter.number == chapter_number).ok_or_else(|| AppError::ComfyUi("chapter disappeared while saving generated image".into()))?;
-    let scene = chapter.scenes.iter_mut().find(|scene| scene.id == scene_id).ok_or_else(|| AppError::ComfyUi("scene disappeared while saving generated image".into()))?;
-    scene.image_status = "generated".into();
-    scene.image_error = None;
-    scene.image_path = Some(image_path);
-    scene.image_mime = Some(image_mime);
-    scene.image_url = Some(image_url);
-    story.updated_at = crate::now();
-    write_story(&store, story)?;
-    Ok(())
+    for attempt in 0..3 {
+        let mut story = require_story(&store, story_id)?;
+        let chapter = story.chapters.iter_mut().find(|chapter| chapter.number == chapter_number).ok_or_else(|| AppError::ComfyUi("chapter disappeared while saving generated image".into()))?;
+        let scene = chapter.scenes.iter_mut().find(|scene| scene.id == scene_id).ok_or_else(|| AppError::ComfyUi("scene disappeared while saving generated image".into()))?;
+        scene.image_status = "generated".into();
+        scene.image_error = None;
+        scene.image_path = Some(image_path.clone());
+        scene.image_mime = Some(image_mime.clone());
+        scene.image_url = Some(image_url.clone());
+        story.updated_at = crate::now();
+        match write_story(&store, story) {
+            Ok(_) => return Ok(()),
+            Err(AppError::Storage(message)) if attempt < 2 && message.contains("changed while this operation was running") => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(AppError::Storage("failed to save generated image after concurrent changes".into()))
 }
 
 async fn finalize_from_history(app: &AppHandle, client: &Client, base: &Url, story_id: &str, chapter_number: usize, scene_id: &str, prompt_id: &str, history: &Value) -> AppResult<bool> {
