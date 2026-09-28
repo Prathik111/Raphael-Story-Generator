@@ -10,10 +10,10 @@ name = "raphael_story_generator_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.6.1" }
+tauri-build = { version = "=2.6.1" }
 
 [dependencies]
-tauri = { version = "2.11.1", features = ["devtools"] }
+tauri = { version = "=2.11.1", features = ["devtools"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "socks"] }
