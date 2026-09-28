@@ -53,6 +53,9 @@ export interface VisualStyleLora {
   name: string;
   weight: number;
   file_name: string;
+  version_id: string | null;
+  file_id: string | null;
+  sha256: string | null;
   activation_prompts: string[];
 }
 
@@ -60,6 +63,9 @@ export interface StoryVisualConfig {
   checkpoint_id: string;
   checkpoint_name: string;
   checkpoint_file_name: string;
+  checkpoint_version_id: string | null;
+  checkpoint_file_id: string | null;
+  checkpoint_sha256: string | null;
   style_loras: VisualStyleLora[];
 }
 
@@ -70,6 +76,9 @@ export interface SceneLoraSelection {
   character: string | null;
   weight: number;
   file_name: string;
+  version_id: string | null;
+  file_id: string | null;
+  sha256: string | null;
   activation_prompts: string[];
   reason: string;
 }
@@ -133,6 +142,7 @@ export interface ResearchBundle {
 
 export interface Story {
   id: string;
+  revision: number;
   title: string;
   source_prompt: string;
   research: ResearchBundle;
