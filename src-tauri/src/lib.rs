@@ -11,7 +11,7 @@ use research::ResearchBundle;
 use serde::{Deserialize, Serialize};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
-use std::{collections::HashMap, env, fs, path::{Path, PathBuf}, sync::RwLock};
+use std::{collections::HashMap, env, fs, path::PathBuf, sync::RwLock};
 use keyring::Entry;
 use tauri::{AppHandle, Emitter, Manager, State};
 use thiserror::Error;
@@ -2819,6 +2819,7 @@ mod tests {
             title: "Story".into(),
             source_prompt: String::new(),
             research: ResearchBundle::default(),
+            revision: 0,
             metadata: StoryMetadata::default(),
             visual_config: StoryVisualConfig::default(),
             introduction: String::new(),
