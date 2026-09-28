@@ -1678,10 +1678,9 @@ async fn create_story(
     if checkpoint.model_type != registry_core::ModelType::Checkpoint {
         return Err(AppError::Registry("selected base model is not a checkpoint".into()));
     }
-    let compatible = client
-        .compatible(&checkpoint.id, Some(registry_core::ModelType::Lora))
-        .await
-        .map_err(|e| AppError::Registry(format!("failed to resolve compatible LoRAs: {e}")))?;
+    let compatible = registry
+        .compatible_models(&checkpoint.id, Some(registry_core::ModelType::Lora))
+        .await?;
     let compatible_ids = compatible.iter().map(|model| model.id.as_str()).collect::<std::collections::HashSet<_>>();
 
     let mut style_loras = Vec::new();
