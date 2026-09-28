@@ -24,8 +24,8 @@ futures-util = "0.3"
 regex = "1"
 scraper = "0.24"
 url = "2"
-registry-client = { git = "https://github.com/Prathik111/Raphael-Model-Registry.git", rev = "5c1f591961fb6fbee92abae36cd88848282306e9", package = "registry-client" }
-registry-core = { git = "https://github.com/Prathik111/Raphael-Model-Registry.git", rev = "5c1f591961fb6fbee92abae36cd88848282306e9", package = "registry-core" }
+registry-client = { git = "https://github.com/Prathik111/Raphael-Model-Registry.git", rev = "5d9a8ca73238eac87689143fb685f55e0c42dc19", package = "registry-client" }
+registry-core = { git = "https://github.com/Prathik111/Raphael-Model-Registry.git", rev = "5d9a8ca73238eac87689143fb685f55e0c42dc19", package = "registry-core" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 thiserror = "2"
 uuid = { version = "1.18", features = ["v4", "serde"] }
