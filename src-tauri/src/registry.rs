@@ -291,8 +291,18 @@ impl RegistryState {
             url.push_str(&format!("?type={}", model_type));
         }
 
-        let token = std::fs::read_to_string(&self.inner.token_path)
-            .map_err(|error| AppError::Registry(format!("failed to read Registry token: {error}")))?;
+        let token = if let Some(token) = &self.inner.auth_token {
+            token.clone()
+        } else if self.inner.remote {
+            return Err(AppError::Registry(format!(
+                "Remote Model Registry requires {REGISTRY_TOKEN_ENV} to be configured"
+            )));
+        } else {
+            std::fs::read_to_string(&self.inner.token_path)
+                .map_err(|error| AppError::Registry(format!("failed to read Registry token: {error}")))?
+                .trim()
+                .to_string()
+        };
         let response = self.inner.http
             .get(url)
             .bearer_auth(token.trim())
