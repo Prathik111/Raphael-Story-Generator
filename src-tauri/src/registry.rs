@@ -358,7 +358,8 @@ impl RegistryState {
         .ok_or_else(|| AppError::Registry(format!("model '{}' has no available file matching its latest version", model.name)))?;
 
         let activation_prompts = latest_version
-            .map(|version| version.activation_prompts)
+            .as_ref()
+            .map(|version| version.activation_prompts.clone())
             .unwrap_or_default();
 
         Ok(RegistryModelArtifact {
