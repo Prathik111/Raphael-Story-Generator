@@ -10,19 +10,31 @@ name = "raphael_story_generator_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.6.1" }
+tauri-build = { version = "=2.6.3" }
 
 [dependencies]
-tauri = { version = "2.11.1", features = ["devtools"] }
+tauri = { version = "=2.11.6", features = ["devtools"] }
+tauri-runtime = "=2.11.3"
+tauri-runtime-wry = { version = "=2.11.4", default-features = false }
+tauri-macros = "=2.6.3"
+tauri-codegen = "=2.6.3"
+tauri-utils = "=2.9.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "socks"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots", "url"] }
+base64 = "0.22"
 directories = "6"
-registry-client = { git = "https://github.com/Prathik111/Raphael-Model-Registry.git", rev = "dfa9df1bbce71d0e18892127da94920fbe5aab70", package = "registry-client" }
-registry-core = { git = "https://github.com/Prathik111/Raphael-Model-Registry.git", rev = "dfa9df1bbce71d0e18892127da94920fbe5aab70", package = "registry-core" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+futures-util = "0.3"
+regex = "1"
+scraper = "0.24"
+url = "2"
+registry-client = { git = "https://github.com/Prathik111/Raphael-Model-Registry.git", rev = "5d9a8ca73238eac87689143fb685f55e0c42dc19", package = "registry-client" }
+registry-core = { git = "https://github.com/Prathik111/Raphael-Model-Registry.git", rev = "5d9a8ca73238eac87689143fb685f55e0c42dc19", package = "registry-core" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 thiserror = "2"
 uuid = { version = "1.18", features = ["v4", "serde"] }
+keyring = { version = "3.6", default-features = false, features = ["windows-native"] }
 
 [profile.release]
 codegen-units = 1
