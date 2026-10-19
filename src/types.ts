@@ -219,7 +219,7 @@ export interface RegistryCatalog {
 }
 
 export interface ServiceStatusDto {
-  service: 'registry' | 'searxng' | 'comfyui';
+  service: 'registry' | 'searxng' | 'comfyui' | 'ollama';
   status: ServiceHealthStatus;
   url: string;
   detail: string | null;
@@ -229,6 +229,7 @@ export interface ServiceStatusBoard {
   registry: ServiceStatusDto;
   searxng: ServiceStatusDto;
   comfyui: ServiceStatusDto;
+  ollama: ServiceStatusDto;
 }
 
 export interface StoryVisualSetup {
