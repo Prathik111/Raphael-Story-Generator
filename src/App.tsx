@@ -342,7 +342,7 @@ function NewStoryPanel({
 }
 
 function ServiceHealthPanel({ status }: { status: ServiceStatusBoard }) {
-  const items = [status.registry, status.searxng, status.comfyui];
+  const items = [status.registry, status.searxng, status.comfyui, status.ollama];
   const label = (value: ServiceStatusBoard['registry']['status']) => value.toUpperCase();
   return <section className="hud-panel inspector-panel service-health-panel">
     <div className="panel-title-row">
@@ -730,6 +730,7 @@ export default function App() {
     registry: { service: 'registry', status: 'checking', url: 'http://127.0.0.1:43217', detail: 'Checking Registry API…' },
     searxng: { service: 'searxng', status: 'checking', url: 'http://127.0.0.1:8080', detail: 'Checking SearXNG API…' },
     comfyui: { service: 'comfyui', status: 'checking', url: 'http://127.0.0.1:8188', detail: 'Checking ComfyUI API…' },
+    ollama: { service: 'ollama', status: 'checking', url: 'http://127.0.0.1:11434', detail: 'Checking Ollama API…' },
   });
   const serviceProbeActive = useRef(false);
 
@@ -901,6 +902,7 @@ export default function App() {
         registry: { ...current.registry, status: 'checking', detail: message },
         searxng: { ...current.searxng, status: 'checking', detail: message },
         comfyui: { ...current.comfyui, status: 'checking', detail: message },
+        ollama: { ...current.ollama, status: 'checking', detail: message },
       }));
     } finally {
       serviceProbeActive.current = false;

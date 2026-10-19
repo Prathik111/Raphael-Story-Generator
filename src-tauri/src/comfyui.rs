@@ -115,19 +115,29 @@ pub async fn detect_api_url(configured: &str) -> AppResult<String> {
         "http://localhost:8188".to_string(),
     ]);
 
-    let client = http_client()?;
+    // Health checks run on a tight UI refresh cadence. Keep their request timeout
+    // short and probe the canonical ComfyUI API health endpoint once per candidate;
+    // image-generation requests use the separate longer-lived client below.
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(1))
+        .timeout(Duration::from_secs(2))
+        .build()
+        .map_err(|error| AppError::ComfyUi(format!("failed to create ComfyUI health client: {error}")))?;
     let mut errors = Vec::new();
+    let mut seen = std::collections::HashSet::new();
 
     for candidate in candidates {
         let Ok(base) = base_url(&candidate) else {
             continue;
         };
+        let normalized = base.to_string().trim_end_matches('/').to_string();
+        if !seen.insert(normalized.clone()) {
+            continue;
+        }
 
-        for endpoint in ["system_stats", "queue", "object_info"] {
-            match probe_endpoint(&client, &base, endpoint).await {
-                Ok(()) => return Ok(base.to_string().trim_end_matches('/').to_string()),
-                Err(error) => errors.push(format!("{}{}: {}", base, endpoint, error)),
-            }
+        match probe_endpoint(&client, &base, "system_stats").await {
+            Ok(()) => return Ok(normalized),
+            Err(error) => errors.push(format!("{}/system_stats: {}", normalized, error)),
         }
     }
 

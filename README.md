@@ -42,7 +42,7 @@ Raphael -> localhost SearXNG -> Tor -> Internet search engines
 
 SearXNG is configured to route its outbound engine requests through Tor. Raphael also fetches each selected source page through the local Tor proxy, extracts readable text locally, and sends only the retrieved source context to the configured LLM for citation-backed fact extraction. Research facts and source URLs are persisted with the story.
 
-The desktop application now starts the bundled gateway automatically when it opens if the local SearXNG/Tor endpoints are not already healthy. It installs the gateway files into the app's local data directory, generates a local SearXNG secret, starts Docker Compose, and waits for both SearXNG and Tor routing to become ready.
+The desktop application starts the bundled gateway automatically when it opens if the local SearXNG/Tor endpoints are not already healthy and web research is enabled. It installs the gateway files into the app's local data directory, generates a local SearXNG secret, starts Docker Compose, and waits for SearXNG and Tor routing to become ready. If Docker is unavailable during launch, Raphael retries startup every 15 seconds until the gateway starts or web research is disabled.
 
 For manual operation or troubleshooting, the same stack can be started from `privacy-search/`:
 
@@ -80,7 +80,7 @@ Web research settings include the local SearXNG URL, local Tor/SOCKS5 proxy, fai
 
 ### Live service health
 
-The top status strip and **Raphael Services** panel actively probe the configured Registry, SearXNG search API, and ComfyUI `/system_stats` endpoint. The UI reports CHECKING, ONLINE, OFFLINE, or DISABLED from those real API probes; these are not static labels.
+The **Raphael Services** panel probes the Registry, SearXNG local endpoint, ComfyUI `/system_stats`, and Ollama `/api/version` every 3 seconds while the app is open. Ollama checks the local `11434` endpoint by default, honors `OLLAMA_HOST` and `RAPHAEL_OLLAMA_URL`, and also considers a configured local LLM URL. Health requests have bounded timeouts; ComfyUI generation keeps its separate longer timeout. Status reflects API responses rather than a bare open TCP port.
 
 ## LAN Model Registry
 
@@ -216,4 +216,4 @@ All actionable UI controls are rendered as semantic buttons, with runtime errors
 
 
 ### Runtime service health
-Raphael continuously probes the live Model Registry `/health`, SearXNG search API, and ComfyUI `/system_stats` endpoint. The UI reports ONLINE/OFFLINE/CHECKING based on those API responses rather than static configuration text.
+Raphael continuously probes the live Model Registry, SearXNG local endpoint, ComfyUI `/system_stats`, and Ollama `/api/version` endpoint on a 3-second UI refresh cadence. Ollama uses `http://127.0.0.1:11434` by default and can be pointed at a different local endpoint with `RAPHAEL_OLLAMA_URL`; `OLLAMA_HOST` is also recognized. Probes are API-level checks with bounded timeouts rather than static labels or bare TCP-connect checks.

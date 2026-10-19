@@ -2611,12 +2611,32 @@ pub fn run() {
 
             if web_settings.web_research_enabled {
                 let handle = app.handle().clone();
-                let startup_settings = web_settings.clone();
                 tauri::async_runtime::spawn(async move {
-                    if let Err(error) =
-                        privacy_gateway::ensure_started_with_settings(&handle, &startup_settings).await
-                    {
-                        eprintln!("Raphael private web research gateway startup failed: {error}");
+                    loop {
+                        let current_settings = {
+                            let store = handle.state::<Store>();
+                            match store.settings.read() {
+                                Ok(settings) => settings.clone(),
+                                Err(error) => {
+                                    eprintln!("Raphael could not read research settings during gateway startup: {error}");
+                                    break;
+                                }
+                            }
+                        };
+
+                        if !current_settings.web_research_enabled {
+                            break;
+                        }
+
+                        match privacy_gateway::ensure_started_with_settings(&handle, &current_settings).await {
+                            Ok(()) => break,
+                            Err(error) => {
+                                eprintln!(
+                                    "Raphael private web research gateway startup failed; retrying in 15 seconds: {error}"
+                                );
+                                tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                            }
+                        }
                     }
                 });
             }
