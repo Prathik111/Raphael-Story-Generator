@@ -9,7 +9,8 @@
     "build": "npm run prepare:reference && tsc && vite build",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
+    "tauri:icons": "node scripts/ensure-windows-icon.mjs",
+    "tauri:build": "npm run tauri:icons && tauri build",
     "lint": "tsc --noEmit",
     "prepare:reference": "node scripts/prepare-reference.mjs"
   },
@@ -20,7 +21,7 @@
     "three": "0.128.0"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.11.4",
+    "@tauri-apps/cli": "2.11.5",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^5.0.2",
