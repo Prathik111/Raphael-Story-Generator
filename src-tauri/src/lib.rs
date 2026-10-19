@@ -2615,8 +2615,9 @@ pub fn run() {
                     loop {
                         let current_settings = {
                             let store = handle.state::<Store>();
-                            match store.settings.read() {
-                                Ok(settings) => settings.clone(),
+                            let settings_result = store.settings.read().map(|settings| settings.clone());
+                            match settings_result {
+                                Ok(settings) => settings,
                                 Err(error) => {
                                     eprintln!("Raphael could not read research settings during gateway startup: {error}");
                                     break;
