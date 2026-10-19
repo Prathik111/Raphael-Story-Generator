@@ -2,6 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from './tauri';
 import type { AppSettings, AppState, Chapter, Scene, Story } from './types';
 
+function Background() {
+  return <iframe className="raphael-bg" src="./reference/index.html" title="Raphael background" aria-hidden="true" />;
+}
+
 function PulseMark() {
   return <div className="raphael-core" aria-label="Raphael"><span className="core-dot"/><i className="core-orbit orbit-a"/><i className="core-orbit orbit-b"/><i className="core-orbit orbit-c"/></div>;
 }
@@ -190,6 +194,7 @@ export default function App() {
 
   if (!state) return (
     <div className="setup-shell">
+      <Background/>
       <PulseMark/>
       <div className="loading-card hud-panel">
         <div className="eyebrow">RAPHAEL STORY GENERATOR</div>
@@ -213,6 +218,8 @@ export default function App() {
   );
 
   return <div className="app-shell">
+    <Background/>
+    <div className="noise" />
     <header className="topbar">
       <div className="brand"><PulseMark/><div><div className="brand-title">RAPHAEL</div><div className="brand-subtitle">STORY GENERATOR</div></div></div>
       <div className="top-status"><span className={state.llm_configured ? 'status-ok' : 'status-warn'}>LLM {state.llm_configured ? 'READY' : 'NOT CONFIGURED'}</span><span>SCENES {totalScenes}</span><button className="icon-btn" onClick={() => setSettingsOpen(true)} title="Engine settings">⚙</button></div>
