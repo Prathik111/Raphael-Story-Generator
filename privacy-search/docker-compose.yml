@@ -1,0 +1,17 @@
+services:
+  tor:
+    build:
+      context: ./tor
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9050:9050"
+
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    restart: unless-stopped
+    depends_on:
+      - tor
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./searxng:/etc/searxng:rw

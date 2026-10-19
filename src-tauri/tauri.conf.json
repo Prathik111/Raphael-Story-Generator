@@ -5,7 +5,7 @@
   "identifier": "com.raphael.storygenerator",
   "build": {
     "beforeDevCommand": "npm run prepare:reference && npm run dev",
-    "beforeBuildCommand": "npm run prepare:reference && npm run build",
+    "beforeBuildCommand": "npm run build",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist"
   },
@@ -29,8 +29,14 @@
       "msi",
       "nsis"
     ],
+    "icon": [
+      "icons/icon.ico"
+    ],
     "category": "Utility",
     "shortDescription": "AI story and manga scene generator",
-    "longDescription": "Local-first story generation with persistent canon, chapter continuation, scene extraction and ComfyUI-ready image prompts."
+    "longDescription": "Local-first story generation with persistent canon, private web research, chapter continuation, scene extraction and ComfyUI-ready image prompts.",
+    "resources": {
+      "../privacy-search/": "privacy-search/"
+    }
   }
 }

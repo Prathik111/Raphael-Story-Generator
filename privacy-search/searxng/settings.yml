@@ -1,0 +1,59 @@
+use_default_settings:
+  engines:
+    keep_only:
+      - brave
+      - duckduckgo
+      - google cse
+      - wikipedia
+      - wikidata
+      - reuters
+      - arxiv
+      - pubmed
+
+
+general:
+  debug: false
+  instance_name: "Raphael Private Search"
+  privacypolicy_url: false
+  donation_url: false
+  contact_url: false
+  enable_metrics: false
+
+server:
+  bind_address: "0.0.0.0"
+  port: 8080
+  limiter: false
+  public_instance: false
+  image_proxy: false
+  method: "POST"
+  secret_key: "__RAPHAEL_SECRET__"
+  default_http_headers:
+    X-Content-Type-Options: "nosniff"
+    X-Download-Options: "noopen"
+    X-Robots-Tag: "noindex, nofollow"
+    Referrer-Policy: "no-referrer"
+
+search:
+  safe_search: 2
+  autocomplete: ""
+  formats:
+    - html
+    - json
+
+outgoing:
+  request_timeout: 15.0
+  max_request_timeout: 30.0
+  extra_proxy_timeout: 10.0
+  useragent_suffix: ""
+  pool_connections: 16
+  enable_http2: false
+  using_tor_proxy: true
+  proxies:
+    all://:
+      - "socks5h://tor:9050"
+
+ui:
+  query_in_title: false
+
+valkey:
+  url: false
