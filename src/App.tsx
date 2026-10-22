@@ -898,7 +898,7 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
       {ollamaDetectionResult ? <div className={ollamaDetectionResult.startsWith('Detected ') ? 'ollama-inline-result' : 'error-box'}>{ollamaDetectionResult}</div> : null}
 
       <div className="section-head setting-gap">HOST OLLAMA ON LAN</div>
-      <small className="settings-hint">Share this PC's local Ollama models with trusted devices on the same LAN. Raphael binds only to a detected private IPv4 address and requires a bearer token. This is plain HTTP, not encrypted transport; do not expose the port through router forwarding or use it on an untrusted network.</small>
+      <small className="settings-hint">Share this PC's local Ollama models with trusted devices on the same LAN. Raphael binds only to a detected private IPv4 address and requires a bearer token. This is plain HTTP, not encrypted transport; do not expose the port through router forwarding or use it on an untrusted network. Keep Ollama itself bound to 127.0.0.1:11434: if OLLAMA_HOST=0.0.0.0 is configured, Ollama's native port can bypass this token-protected proxy.</small>
       <label>LAN port<input type="number" min="1024" max="65535" step="1" value={draft.ollama_lan_port} onChange={e => setDraft({ ...draft, ollama_lan_port: Math.max(1024, Math.min(65535, Number(e.target.value) || 11435)) })} disabled={ollamaHost.running || ollamaHostBusy}/></label>
       <div className="ollama-action-row">
         {ollamaHost.running
