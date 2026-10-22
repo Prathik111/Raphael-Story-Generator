@@ -331,7 +331,8 @@ fn allowed_method_path(method: &Method, raw_path: &str) -> bool {
     // the standard metadata/inference routes during client initialization.
     let path = raw_path.trim_start_matches('/').trim_end_matches('/');
     match (method.as_str(), path) {
-        ("GET", "v1/models")
+        ("GET", "v1")
+        | ("GET", "v1/models")
         | ("POST", "v1/chat/completions")
         | ("POST", "v1/completions")
         | ("POST", "v1/embeddings")
@@ -382,7 +383,21 @@ async fn proxy(
         return response;
     }
 
-    let path = parts.uri.path().trim_start_matches('/');
+    let path = parts.uri.path().trim_start_matches('/').trim_end_matches('/');
+    if parts.method == Method::GET && path.is_empty() {
+        let mut response = Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(json!({
+                "status": "ok",
+                "service": "Raphael Ollama LAN proxy",
+                "api_base": "/v1"
+            }).to_string()))
+            .unwrap_or_else(|_| Response::new(Body::empty()));
+        add_cors_headers(&mut response);
+        return response;
+    }
+
     if !allowed_method_path(&parts.method, path) {
         return json_error(
             StatusCode::NOT_FOUND,
@@ -390,8 +405,16 @@ async fn proxy(
         );
     }
 
-    let path_and_query = parts.uri.path_and_query().map(|value| value.as_str()).unwrap_or("/");
-    let url = format!("{}{}", state.upstream.as_str().trim_end_matches('/'), path_and_query);
+    // Normalize trailing slashes before forwarding so an accepted path does
+    // not become a 404 at the Ollama upstream. Some clients probe GET /v1;
+    // answer that as the standard model-list endpoint.
+    let upstream_path = if parts.method == Method::GET && path == "v1" {
+        "v1/models"
+    } else {
+        path
+    };
+    let query = parts.uri.query().map(|value| format!("?{value}")).unwrap_or_default();
+    let url = format!("{}/{}{}", state.upstream.as_str().trim_end_matches('/'), upstream_path, query);
     let mut outbound = state.client.request(parts.method, url);
 
     for (name, value) in parts.headers.iter() {
@@ -450,6 +473,7 @@ mod tests {
         assert!(allowed_method_path(&Method::POST, "v1/chat/completions"));
         assert!(allowed_method_path(&Method::GET, "v1/models"));
         assert!(allowed_method_path(&Method::GET, "/v1/models/"));
+        assert!(allowed_method_path(&Method::GET, "/v1"));
         assert!(allowed_method_path(&Method::POST, "/v1/chat/completions/"));
         assert!(allowed_method_path(&Method::POST, "v1/responses"));
         assert!(allowed_method_path(&Method::GET, "api/tags"));
