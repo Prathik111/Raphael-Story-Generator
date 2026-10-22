@@ -4,7 +4,7 @@ use axum::{
     http::{
         header::{
             self, HeaderValue, ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
-            ACCESS_CONTROL_ALLOW_ORIGIN, AUTHORIZATION, CONTENT_TYPE,
+            ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE,
         },
         Method, Request, Response, StatusCode,
     },
@@ -20,7 +20,6 @@ use std::{
     time::Duration,
 };
 use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
-use uuid::Uuid;
 
 use crate::{AppError, AppResult, AppSettings};
 
@@ -40,7 +39,6 @@ pub struct OllamaLanHostStatus {
     pub port: u16,
     pub lan_url: Option<String>,
     pub openai_base_url: Option<String>,
-    pub token: Option<String>,
     pub models: Vec<String>,
     pub detail: Option<String>,
 }
@@ -52,7 +50,6 @@ impl OllamaLanHostStatus {
             port,
             lan_url: None,
             openai_base_url: None,
-            token: None,
             models: Vec::new(),
             detail: Some("Ollama LAN hosting is stopped.".into()),
         }
@@ -73,7 +70,6 @@ pub struct OllamaLanHost {
 #[derive(Clone)]
 struct ProxyState {
     upstream: Url,
-    token: String,
     client: Client,
 }
 
@@ -274,10 +270,8 @@ pub async fn start_host(
         ))
     })?;
 
-    let token = Uuid::new_v4().simple().to_string();
     let proxy_state = ProxyState {
         upstream: upstream.clone(),
-        token: token.clone(),
         client: Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(60 * 60))
@@ -304,7 +298,6 @@ pub async fn start_host(
         port,
         lan_url: Some(lan_url.clone()),
         openai_base_url: Some(format!("{lan_url}/v1")),
-        token: Some(token),
         models,
         detail: Some(format!(
             "Authenticated Ollama proxy running on private LAN address {lan_url}; upstream is local Ollama at {}.",
@@ -333,12 +326,16 @@ pub fn stop_host(host: &OllamaLanHost, default_port: u16) -> AppResult<OllamaLan
     Ok(OllamaLanHostStatus::stopped(default_port))
 }
 
-fn allowed_method_path(method: &Method, path: &str) -> bool {
+fn allowed_method_path(method: &Method, raw_path: &str) -> bool {
+    // Some OpenAI-compatible clients add a trailing slash or request one of
+    // the standard metadata/inference routes during client initialization.
+    let path = raw_path.trim_start_matches('/').trim_end_matches('/');
     match (method.as_str(), path) {
         ("GET", "v1/models")
         | ("POST", "v1/chat/completions")
         | ("POST", "v1/completions")
         | ("POST", "v1/embeddings")
+        | ("POST", "v1/responses")
         | ("POST", "api/chat")
         | ("POST", "api/generate")
         | ("POST", "api/embed")
@@ -346,6 +343,9 @@ fn allowed_method_path(method: &Method, path: &str) -> bool {
         | ("POST", "api/show")
         | ("GET", "api/tags")
         | ("GET", "api/version") => true,
+        // A read-only model lookup is safe; mutations and model management
+        // endpoints such as /api/pull, /api/delete and /api/push stay blocked.
+        ("GET", path) if path.starts_with("v1/models/") && path.len() > "v1/models/".len() => true,
         _ => false,
     }
 }
@@ -384,15 +384,10 @@ async fn proxy(
 
     let path = parts.uri.path().trim_start_matches('/');
     if !allowed_method_path(&parts.method, path) {
-        return json_error(StatusCode::NOT_FOUND, "This Ollama LAN proxy route is not enabled.");
-    }
-
-    let expected = format!("Bearer {}", state.token);
-    let authorized = parts.headers.get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value == expected);
-    if !authorized {
-        return json_error(StatusCode::UNAUTHORIZED, "A valid Bearer token is required.");
+        return json_error(
+            StatusCode::NOT_FOUND,
+            &format!("Ollama LAN proxy route not enabled: {} /{}.", parts.method, path),
+        );
     }
 
     let path_and_query = parts.uri.path_and_query().map(|value| value.as_str()).unwrap_or("/");
@@ -454,8 +449,13 @@ mod tests {
     fn proxy_only_exposes_inference_and_read_only_model_routes() {
         assert!(allowed_method_path(&Method::POST, "v1/chat/completions"));
         assert!(allowed_method_path(&Method::GET, "v1/models"));
+        assert!(allowed_method_path(&Method::GET, "/v1/models/"));
+        assert!(allowed_method_path(&Method::POST, "/v1/chat/completions/"));
+        assert!(allowed_method_path(&Method::POST, "v1/responses"));
         assert!(allowed_method_path(&Method::GET, "api/tags"));
         assert!(!allowed_method_path(&Method::POST, "api/pull"));
+        assert!(!allowed_method_path(&Method::POST, "api/delete"));
+        assert!(!allowed_method_path(&Method::POST, "v1/chat/completions/extra"));
         assert!(!allowed_method_path(&Method::DELETE, "api/delete"));
     }
 }

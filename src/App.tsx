@@ -780,7 +780,7 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [ollamaHost, setOllamaHost] = useState<OllamaLanHostStatus>({
     running: false, port: settings.ollama_lan_port, lan_url: null,
-    openai_base_url: null, token: null, models: [], detail: 'Checking LAN host status…',
+    openai_base_url: null, models: [], detail: 'Checking LAN host status…',
   });
   const [ollamaHostBusy, setOllamaHostBusy] = useState(false);
   const [ollamaHostMessage, setOllamaHostMessage] = useState<string | null>(null);
@@ -871,15 +871,7 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
     }
   };
 
-  const copyOllamaHostToken = async () => {
-    if (!ollamaHost.token) return;
-    try {
-      await navigator.clipboard.writeText(ollamaHost.token);
-      setOllamaHostMessage('LAN access token copied to the clipboard.');
-    } catch (error) {
-      setOllamaHostMessage('Clipboard access failed: ' + toErrorMessage(error));
-    }
-  };
+
   return <div className="settings-backdrop" onMouseDown={onClose}><section className="settings-panel hud-panel" onMouseDown={e => e.stopPropagation()}>
     <header className="settings-header"><div><div className="eyebrow">RAPHAEL CORE</div><h2>ENGINE SETTINGS</h2></div><button className="settings-close" onClick={onClose}>×</button></header>
     <div className="settings-scroll">
@@ -898,7 +890,7 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
       {ollamaDetectionResult ? <div className={ollamaDetectionResult.startsWith('Detected ') ? 'ollama-inline-result' : 'error-box'}>{ollamaDetectionResult}</div> : null}
 
       <div className="section-head setting-gap">HOST OLLAMA ON LAN</div>
-      <small className="settings-hint">Share this PC's local Ollama models with trusted devices on the same LAN. Raphael binds only to a detected private IPv4 address and requires a bearer token. This is plain HTTP, not encrypted transport; do not expose the port through router forwarding or use it on an untrusted network. Keep Ollama itself bound to 127.0.0.1:11434: if OLLAMA_HOST=0.0.0.0 is configured, Ollama's native port can bypass this token-protected proxy.</small>
+      <small className="settings-hint">Share this PC's local Ollama models with devices on the same LAN without an API key or Bearer token. Raphael binds only to a detected private IPv4 address. This is unauthenticated plain HTTP: anyone who can reach this port can use the host's installed models. Use only on a trusted LAN, do not expose the port through router forwarding, and keep Ollama itself bound to 127.0.0.1:11434.</small>
       <label>LAN port<input type="number" min="1024" max="65535" step="1" value={draft.ollama_lan_port} onChange={e => setDraft({ ...draft, ollama_lan_port: Math.max(1024, Math.min(65535, Number(e.target.value) || 11435)) })} disabled={ollamaHost.running || ollamaHostBusy}/></label>
       <div className="ollama-action-row">
         {ollamaHost.running
@@ -908,9 +900,8 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
       </div>
       {ollamaHost.running ? <div className="ollama-host-details">
         <div><span className="section-head">OPENAI-COMPATIBLE BASE URL</span><code>{ollamaHost.openai_base_url}</code></div>
-        <div><span className="section-head">BEARER TOKEN / API KEY</span><code className="ollama-host-token">{ollamaHost.token}</code><button type="button" className="mini-btn" onClick={() => void copyOllamaHostToken()}>COPY TOKEN</button></div>
         <div><span className="section-head">HOST MODELS</span><p>{ollamaHost.models.join(' · ')}</p></div>
-        <small className="settings-hint">On another device, set its LLM Base URL to the address above and its API key to this token. The proxy only allows inference and read-only model-list routes; pulling or deleting host models is blocked.</small>
+        <small className="settings-hint">On another device, set its LLM Base URL to the address above and leave API key blank. The proxy has no authentication, allows inference and read-only model-list routes, and blocks model pull/delete endpoints.</small>
       </div> : null}
       {ollamaHostMessage ? <div className={ollamaHost.running && ollamaHostMessage.includes('running') ? 'ollama-inline-result' : 'settings-inline-error error-box'}>{ollamaHostMessage}</div> : null}
 

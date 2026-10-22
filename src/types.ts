@@ -311,7 +311,6 @@ export interface OllamaLanHostStatus {
   port: number;
   lan_url: string | null;
   openai_base_url: string | null;
-  token: string | null;
   models: string[];
   detail: string | null;
 }
