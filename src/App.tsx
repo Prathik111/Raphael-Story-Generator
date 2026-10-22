@@ -1214,7 +1214,7 @@ export default function App() {
     <div className="workspace">
       <aside className="sidebar">
         <div className="sidebar-head"><div><div className="eyebrow">LIBRARY</div><h2>STORIES</h2></div><button className="square-btn" disabled={busy || extracting || Boolean(buildingPrompt) || Boolean(queueing) || bulkAction !== null} onClick={() => { setStory(null); setPrompt(''); setDirective(''); setPromptPreview(null); }}>+</button></div>
-        <div className="story-list">{state.stories.length === 0 ? <div className="empty-sidebar">No stories yet.<br/>Create the first one from the story prompt.</div> : state.stories.map(item => <StoryCard key={item.id} story={item} selected={story?.id === item.id} disabled={busy || extracting || Boolean(buildingPrompt) || Boolean(queueing)} onClick={() => void selectStory(item.id)}/>)}</div>
+        <div className="story-list">{state.stories.length === 0 ? <div className="empty-sidebar">No stories yet.<br/>Create the first one from the story prompt.</div> : state.stories.map(item => <StoryCard key={item.id} story={item} selected={story?.id === item.id} disabled={busy || extracting || Boolean(buildingPrompt) || Boolean(queueing) || bulkAction !== null} onClick={() => void selectStory(item.id)}/>)}</div>
         <ServiceHealthPanel status={serviceStatus}/>
         <div className="sidebar-foot">
           <button type="button" className="settings-trigger" aria-label="Open settings" title="SETTINGS" onClick={() => setSettingsOpen(true)}>
