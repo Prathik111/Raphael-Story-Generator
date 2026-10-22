@@ -80,14 +80,14 @@ pub fn build_raphael_workflow(request: RaphaelWorkflowRequest) -> AppResult<Work
     nodes.insert("4".into(), json!({
         "class_type": "CLIPLoader",
         "inputs": {
-            "clip_name": "anima\\\\oneObsession_anima29BV1_txt.safetensors",
+            "clip_name": "anima\\oneObsession_anima29BV1_txt.safetensors",
             "type": "stable_diffusion",
             "device": "default"
         }
     }));
     nodes.insert("9".into(), json!({
         "class_type": "VAELoader",
-        "inputs": { "vae_name": "anima\\\\qwen_image_vae.safetensors" }
+        "inputs": { "vae_name": "anima\\qwen_image_vae.safetensors" }
     }));
     nodes.insert("5".into(), json!({
         "class_type": "CLIPTextEncode",
@@ -426,7 +426,7 @@ mod tests {
     #[test]
     fn built_in_raphael_workflow_uses_checkpoint_and_model_only_loras() {
         let result = build_raphael_workflow(RaphaelWorkflowRequest {
-            checkpoint_name: "anima\\\\miaomiaoRealskin_anima13.safetensors".into(),
+            checkpoint_name: "anima\\miaomiaoRealskin_anima13.safetensors".into(),
             use_unet_loader: true,
             positive_prompt: "aetheria_trigger, a hero at dusk".into(),
             negative_prompt: "blurry".into(),
@@ -440,7 +440,7 @@ mod tests {
 
         let workflow = result.workflow.as_object().unwrap();
         assert_eq!(workflow["13"]["class_type"], "UNETLoader");
-        assert_eq!(workflow["13"]["inputs"]["unet_name"], "anima\\\\miaomiaoRealskin_anima13.safetensors");
+        assert_eq!(workflow["13"]["inputs"]["unet_name"], "anima\\miaomiaoRealskin_anima13.safetensors");
         assert_eq!(workflow["4"]["class_type"], "CLIPLoader");
         assert_eq!(workflow["9"]["class_type"], "VAELoader");
         assert_eq!(workflow["5"]["inputs"]["text"], "aetheria_trigger, a hero at dusk");
