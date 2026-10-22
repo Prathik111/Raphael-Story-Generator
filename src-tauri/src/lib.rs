@@ -613,7 +613,7 @@ fn scene_value_as_string(value: &Value) -> String {
         // Scene descriptions occasionally arrive as structured objects. Prefer a
         // readable text-like field; preserve the whole object if none is available.
         Value::Object(map) => {
-            for key in ["text", "description", "value", "name", "location", "time", "action", "details", "summary"] {
+            for key in ["text", "description", "value", "name", "location", "time", "period", "action", "details", "summary"] {
                 if let Some(child) = map.get(key) {
                     let text = scene_value_as_string(child);
                     if !text.trim().is_empty() {
@@ -2350,7 +2350,7 @@ async fn extract_scenes(story_id: String, chapter_number: usize, store: State<'_
     let visual_characters = story.bible.characters.iter().map(|c| format!("{} [{}] — appearance: {}; clothing: {}; personality: {:?}", c.id, c.name, c.appearance, c.clothing, c.personality)).collect::<Vec<_>>().join("
 ");
     let system = settings.scene_director_system_prompt.as_str();
-    let schema = r#"{\"scenes\":[{\"description\":\"single coherent visual beat\",\"location\":\"specific location as a string\",\"time\":\"time of day as a string\",\"characters\":[\"Exact canonical character name\"],\"action\":\"visible action as a string\",\"composition\":\"camera and framing as a string\",\"dialogue\":\"dialogue as a string or empty string\"}]}"#;
+    let schema = r#"{"scenes":[{"description":"single coherent visual beat","location":"specific location as a string","time":"time of day as a string","characters":["Exact canonical character name"],"action":"visible action as a string","composition":"camera and framing as a string","dialogue":"dialogue as a string or empty string"}]}"#;
     let user = format!("CHAPTER {}
 TITLE: {}
 
@@ -2394,6 +2394,36 @@ Return:
     Ok(SceneExtractionResult { chapter_number, scenes })
 }
 #[tauri::command]
+fn compose_positive_prompt(
+    activation_prompts: &[String],
+    canonical_character_visuals: &str,
+    generated_scene_prompt: &str,
+) -> String {
+    let activations = unique_nonempty(activation_prompts.iter().cloned());
+    let mut scene_prompt = generated_scene_prompt.trim().to_string();
+    for activation in &activations {
+        scene_prompt = scene_prompt.replace(activation, "");
+    }
+    scene_prompt = scene_prompt
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let mut parts = activations;
+    if !canonical_character_visuals.trim().is_empty() {
+        parts.push(format!(
+            "canonical character design lock: {}",
+            canonical_character_visuals.trim()
+        ));
+    }
+    if !scene_prompt.is_empty() {
+        parts.push(scene_prompt);
+    }
+    unique_nonempty(parts).join(", ")
+}
+
 async fn build_scene_prompt(
     story_id: String,
     chapter_number: usize,
@@ -2425,9 +2455,20 @@ async fn build_scene_prompt(
     }
     let characters = story.bible.characters.iter()
         .filter(|c| matched_ids.contains(c.id.as_str()))
-        .map(|c| format!("{} — appearance: {}; clothing: {}; personality: {:?}", c.name, c.appearance, c.clothing, c.personality))
-        .collect::<Vec<_>>().join("
-");
+        .map(|c| format!("{} — canonical appearance: {}; canonical clothing/outfit: {}; personality: {:?}", c.name, c.appearance, c.clothing, c.personality))
+        .collect::<Vec<_>>().join("\n");
+    let canonical_character_visuals = scene.characters.iter()
+        .filter_map(|name| story.bible.characters.iter().find(|c| {
+            name.trim() == c.id || normalize_name(name) == normalize_name(&c.name)
+        }))
+        .map(|character| format!(
+            "{} — appearance: {}; exact canonical outfit: {}",
+            character.name,
+            if character.appearance.trim().is_empty() { "not specified" } else { character.appearance.trim() },
+            if character.clothing.trim().is_empty() { "not specified" } else { character.clothing.trim() },
+        ))
+        .collect::<Vec<_>>();
+    let canonical_character_visuals = unique_nonempty(canonical_character_visuals).join("; ");
     emit_pipeline(store.app(), "lora_selection", "started", "Selecting compatible dynamic LoRAs");
     let selected_loras = select_scene_loras(store.app(), &registry, &settings, &story, scene).await?;
 
@@ -2464,7 +2505,12 @@ TIME: {}
 ACTION: {}
 COMPOSITION: {}
 DIALOGUE: {}
-CHARACTERS:
+
+CANONICAL CHARACTER DESIGN — SOURCE OF TRUTH:
+{}
+Every listed character's appearance and outfit must remain exactly consistent with this reference. Do not change hair, eye color, age, body type, signature features, clothing type, clothing colors, accessories, or outfit layers. Raphael will inject this canonical reference into the final prompt verbatim. The generated positive_prompt should focus on scene-specific pose, action, expression, framing, lighting and environment, and must not invent or contradict character design.
+
+CHARACTERS (same canon, additional context):
 {}
 
 LOCKED STYLE:
@@ -2487,6 +2533,7 @@ Return:
         scene.action,
         scene.composition,
         scene.dialogue,
+        canonical_character_visuals,
         characters,
         story.visual_config.style_loras.iter().map(|l| format!("{} (weight {})", l.name, l.weight)).collect::<Vec<_>>().join(", "),
         selected_loras.iter().map(|l| format!("{} [{} / {}] (weight {})", l.name, l.role, l.character.clone().unwrap_or_default(), l.weight)).collect::<Vec<_>>().join(", "),
@@ -2511,12 +2558,11 @@ Return:
             .chain(selected_loras.iter().flat_map(|l| l.activation_prompts.clone()))
             .collect::<Vec<_>>()
     );
-    let mut positive_prompt = parsed.positive_prompt.trim().to_string();
-    for prompt in required_activation_prompts.iter().rev() {
-        if !positive_prompt.contains(prompt) {
-            positive_prompt = format!("{}, {}", prompt, positive_prompt);
-        }
-    }
+    let positive_prompt = compose_positive_prompt(
+        &required_activation_prompts,
+        &canonical_character_visuals,
+        &parsed.positive_prompt,
+    );
 
     scene_mut.selected_loras = selected_loras;
     scene_mut.positive_prompt = positive_prompt;
@@ -3131,6 +3177,21 @@ mod tests {
         assert_eq!(parsed.scenes[0].composition, r#"{"camera":"low angle","framing":"wide shot"}"#);
         assert_eq!(parsed.scenes[0].dialogue, "We are not alone.");
         assert_eq!(parsed.scenes[0].characters, vec!["Aetheria Vane", "Milo"]);
+    }
+
+    #[test]
+    fn positive_prompt_injects_canonical_character_appearance_and_outfit() {
+        let activations = vec!["aetheria_trigger".to_string(), "clockwork_style".to_string()];
+        let visuals = "Aetheria Vane — appearance: silver hair, blue eyes; exact canonical outfit: navy coat, brass buttons";
+        let generated = "wide cinematic shot, aetheria_trigger, dramatic twilight lighting";
+        let result = compose_positive_prompt(&activations, visuals, generated);
+        assert!(result.starts_with("aetheria_trigger, clockwork_style, canonical character design lock:"));
+        assert!(result.contains("silver hair, blue eyes"));
+        assert!(result.contains("navy coat, brass buttons"));
+        assert!(result.contains("wide cinematic shot"));
+        assert!(result.contains("dramatic twilight lighting"));
+        assert_eq!(result.matches("aetheria_trigger").count(), 1);
+        assert!(!result.contains(", ,"));
     }
 
     #[test]
