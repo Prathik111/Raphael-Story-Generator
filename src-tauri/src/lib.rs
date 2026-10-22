@@ -355,6 +355,19 @@ fn json_value_as_string(value: &Value) -> Value {
 }
 
 fn normalize_story_architect_json(value: &mut Value) {
+    let character_names = value
+        .get("characters")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|character| character.get("name").and_then(Value::as_str))
+        .map(str::to_string)
+        .filter(|name| !name.trim().is_empty())
+        .collect::<Vec<_>>();
+    normalize_story_architect_value(value, &character_names);
+}
+
+fn normalize_story_architect_value(value: &mut Value, character_names: &[String]) {
     const STRING_KEYS: &[&str] = &[
         "title",
         "demographic",
@@ -409,20 +422,89 @@ fn normalize_story_architect_json(value: &mut Value) {
                     } else {
                         *child = Value::Array(vec![json_value_as_string(child)]);
                     }
+                } else if ["character_state_updates", "relationship_updates", "relationships", "characters"]
+                    .iter()
+                    .any(|candidate| *candidate == key)
+                {
+                    normalize_story_architect_records(child, key, character_names);
                 } else {
-                    normalize_story_architect_json(child);
+                    normalize_story_architect_value(child, character_names);
                 }
             }
         }
         Value::Array(items) => {
             for item in items {
-                normalize_story_architect_json(item);
+                normalize_story_architect_value(item, character_names);
             }
         }
         Value::String(_) | Value::Number(_) | Value::Bool(_) | Value::Null => {}
     }
 }
 
+fn normalize_story_architect_records(value: &mut Value, key: &str, character_names: &[String]) {
+    let original = std::mem::replace(value, Value::Null);
+    let items = match original {
+        Value::Array(items) => items,
+        Value::String(text) => vec![Value::String(text)],
+        Value::Null => Vec::new(),
+        other => vec![other],
+    };
+
+    let mut normalized = Vec::with_capacity(items.len());
+    for item in items {
+        let mut item = match item {
+            Value::String(text) if key == "character_state_updates" => {
+                let lower_text = text.to_lowercase();
+                let character_id = character_names
+                    .iter()
+                    .find(|name| lower_text.contains(&name.to_lowercase()))
+                    .cloned()
+                    .or_else(|| (character_names.len() == 1).then(|| character_names[0].clone()))
+                    .unwrap_or_default();
+                json!({
+                    "character_id": character_id,
+                    "current_state": text,
+                    "clothing": null
+                })
+            }
+            Value::String(text) if key == "relationship_updates" => json!({
+                "source_character": "",
+                "target_character": "",
+                "relation_type": "",
+                "description": text
+            }),
+            Value::String(text) if key == "relationships" => json!({
+                "source": "",
+                "target": "",
+                "relation_type": "",
+                "description": text
+            }),
+            Value::String(text) if key == "characters" => json!({"name": text}),
+            other => other,
+        };
+
+        if let Some(object) = item.as_object_mut() {
+            let required_string_fields: &[&str] = match key {
+                "character_state_updates" => &["character_id", "current_state"],
+                "relationship_updates" => &["source_character", "target_character", "relation_type", "description"],
+                "relationships" => &["source", "target", "relation_type", "description"],
+                "characters" => &["name"],
+                _ => &[],
+            };
+            for field in required_string_fields {
+                object.entry((*field).to_string()).or_insert_with(|| Value::String(String::new()));
+            }
+            if key == "character_state_updates" {
+                object.entry("clothing".to_string()).or_insert(Value::Null);
+            }
+        }
+
+        normalize_story_architect_value(&mut item, character_names);
+        normalized.push(item);
+    }
+
+    *value = Value::Array(normalized);
+}
 
 fn parse_story_architect_response(raw: &str) -> Result<InitialResponse, String> {
     let cleaned = clean_json(raw);
@@ -1802,7 +1884,7 @@ async fn create_story(
     let system = settings.story_architect_system_prompt.as_str();
     let schema_hint = r#"
 JSON shape:
-{"title":"","metadata":{"genre":[],"tags":[],"demographic":"","content_rating":"","tone":[],"source_type":"","source_title":"","inspirations":[]},"premise":"","central_conflict":"","themes":[],"world_setting":"","world_rules":[],"locations":[],"characters":[{"name":"","role":"","personality":[],"appearance":"","clothing":"","motivations":[]}],"relationships":[{"source":"","target":"","relation_type":"","description":""}],"open_threads":[],"introduction":"","chapter":{"title":"","summary":"","text":"","events":[],"continuity_updates":[],"character_state_updates":[],"relationship_updates":[],"open_threads":[]}}
+{"title":"","metadata":{"genre":[],"tags":[],"demographic":"","content_rating":"","tone":[],"source_type":"","source_title":"","inspirations":[]},"premise":"","central_conflict":"","themes":[],"world_setting":"","world_rules":[],"locations":[],"characters":[{"name":"","role":"","personality":[],"appearance":"","clothing":"","motivations":[]}],"relationships":[{"source":"","target":"","relation_type":"","description":""}],"open_threads":[],"introduction":"","chapter":{"title":"","summary":"","text":"","events":[],"continuity_updates":[],"character_state_updates":[{"character_id":"","current_state":"","clothing":null}],"relationship_updates":[{"source_character":"","target_character":"","relation_type":"","description":""}],"open_threads":[]}}
 "#;
     let research_context = research::story_architect_context(&research_bundle);
     let architect_prompt = format!("USER STORY REQUEST:
@@ -1813,7 +1895,7 @@ JSON shape:
 {}
 
 Use the web-research facts only when they are supported by the cited sources. Do not invent external facts that are absent from the supplied research.
-Every empty string in the example JSON is a placeholder, not a value to copy. Populate required string fields with meaningful content. In particular, introduction must be a non-empty, engaging 2–4 sentence introduction that sets up the story before Chapter 1. Chapter title, summary, and text must also be non-empty. Chapter 1 must be an actual complete chapter with a beginning, development, and ending hook; aim for roughly 500–800 words of narrative text, not a summary or outline.
+Every empty string in the example JSON is a placeholder, not a value to copy. Populate required string fields with meaningful content. In particular, introduction must be a non-empty, engaging 2–4 sentence introduction that sets up the story before Chapter 1. Chapter title, summary, and text must also be non-empty. Chapter 1 must be an actual complete chapter with a beginning, development, and ending hook; aim for roughly 500–800 words of narrative text, not a summary or outline. Every scalar string field must be a JSON string; list-valued fields must be JSON arrays. For chapter.character_state_updates, every item must be an object with character_id (an exact existing character name or ID), current_state (a string), and optional clothing (a string or null); never put plain strings in this array, and leave it empty when no state changes are needed. For chapter.relationship_updates, each item must be an object with source_character, target_character, relation_type, and description string fields; leave it empty when there are no changes. Relationship entries must use the same object shape shown above, never plain strings.
 Return the JSON shape above.", prompt.trim(), research_context, schema_hint);
     emit_pipeline(store.app(), "story_architect", "started", "Generating story bible and opening chapter");
     let raw = chat(store.app(), &settings, "story_architect", system, &architect_prompt).await?;
@@ -2918,6 +3000,73 @@ mod tests {
 
         let top_level = json!({"thinking":"still thinking"});
         assert_eq!(extract_stream_reasoning(&top_level), Some("still thinking"));
+    }
+
+    #[test]
+    fn story_architect_parser_normalizes_sequence_string_fields_and_string_state_updates() {
+        let raw = r#"{
+            "title":"Test",
+            "metadata":{"genre":["Fantasy"],"tags":["Magic"],"demographic":"Young Adult","content_rating":"Teen","tone":["Atmospheric"],"source_type":"","source_title":"","inspirations":[]},
+            "premise":"A test premise",
+            "central_conflict":"A test conflict",
+            "themes":["identity"],
+            "world_setting":"A test world",
+            "world_rules":["magic"],
+            "locations":["Tower"],
+            "characters":[{
+                "name":"Aetheria Vane",
+                "role":["Inventor","Heir"],
+                "personality":["curious"],
+                "appearance":"silver-haired",
+                "clothing":"coat",
+                "motivations":["find the truth"]
+            }],
+            "relationships":[],
+            "open_threads":[],
+            "introduction":"Intro",
+            "chapter":{
+                "title":"Chapter 1",
+                "summary":"Summary",
+                "text":"Text",
+                "events":[],
+                "continuity_updates":[],
+                "character_state_updates":["Aetheria Vane has fragmented memories of her mother, creating emotional confusion"],
+                "relationship_updates":[],
+                "open_threads":[]
+            }
+        }"#;
+
+        let parsed = parse_story_architect_response(raw)
+            .expect("schema normalization should recover scalar and state-update shape mismatches");
+        assert_eq!(parsed.characters[0].role, r#"["Inventor","Heir"]"#);
+        assert_eq!(parsed.chapter.character_state_updates.len(), 1);
+        assert_eq!(parsed.chapter.character_state_updates[0].character_id, "Aetheria Vane");
+        assert_eq!(
+            parsed.chapter.character_state_updates[0].current_state,
+            "Aetheria Vane has fragmented memories of her mother, creating emotional confusion"
+        );
+    }
+
+    #[test]
+    fn story_architect_parser_normalizes_string_relationship_updates() {
+        let raw = r#"{
+            "title":"Test",
+            "metadata":{"genre":[],"tags":[],"demographic":"General Audience","content_rating":"PG","tone":[],"source_type":"","source_title":"","inspirations":[]},
+            "premise":"Premise","central_conflict":"Conflict","themes":[],"world_setting":"World","world_rules":[],"locations":[],
+            "characters":[{"name":"Hero","role":"lead","personality":[],"appearance":"tall","clothing":"coat","motivations":[]}],
+            "relationships":["The hero trusts the guide."],"open_threads":[],"introduction":"Intro",
+            "chapter":{"title":"Chapter 1","summary":"Summary","text":"Text","events":[],"continuity_updates":[],"character_state_updates":[],"relationship_updates":["The hero now trusts the guide."],"open_threads":[]}
+        }"#;
+
+        let parsed = parse_story_architect_response(raw)
+            .expect("plain-language relationship entries should not crash schema parsing");
+        assert_eq!(parsed.relationships.len(), 1);
+        assert_eq!(parsed.relationships[0].description, "The hero trusts the guide.");
+        assert_eq!(parsed.chapter.relationship_updates.len(), 1);
+        assert_eq!(
+            parsed.chapter.relationship_updates[0].description,
+            "The hero now trusts the guide."
+        );
     }
 
     #[test]
