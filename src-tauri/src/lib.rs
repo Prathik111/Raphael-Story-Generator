@@ -1779,6 +1779,57 @@ fn validate_settings(settings: &AppSettings) -> AppResult<()> {
     Ok(())
 }
 
+fn comfy_relative_model_name(path: &str, relative_path: Option<&str>, folder: &str, fallback: &str) -> String {
+    let source = if !path.trim().is_empty() { path } else { relative_path.unwrap_or_default() };
+    if source.trim().is_empty() {
+        return fallback.to_string();
+    }
+
+    let normalized = source.replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
+    let mut relative = if let Some(index) = lower.find("/models/") {
+        Some(normalized[index + "/models/".len()..].to_string())
+    } else {
+        lower.starts_with("models/").then(|| normalized["models/".len()..].to_string())
+    };
+
+    if let Some(value) = relative.as_mut() {
+        let value_lower = value.to_ascii_lowercase();
+        let folder_prefix = format!("{folder}/");
+        if value_lower.starts_with(&folder_prefix) {
+            *value = value[folder_prefix.len()..].to_string();
+        } else if folder.eq_ignore_ascii_case("unet") && value_lower.starts_with("diffusion_models/") {
+            *value = value["diffusion_models/".len()..].to_string();
+        }
+        if !value.is_empty() {
+            return value.replace('/', "\\");
+        }
+    }
+
+    let marker = format!("/{folder}/");
+    if let Some(index) = lower.find(&marker) {
+        return normalized[index + marker.len()..].replace('/', "\\");
+    }
+    let folder_prefix = format!("{folder}/");
+    if lower.starts_with(&folder_prefix) {
+        return normalized[folder_prefix.len()..].replace('/', "\\");
+    }
+    if folder.eq_ignore_ascii_case("unet") && lower.starts_with("diffusion_models/") {
+        return normalized["diffusion_models/".len()..].replace('/', "\\");
+    }
+    fallback.to_string()
+}
+
+fn checkpoint_uses_unet_loader(path: &str, relative_path: Option<&str>) -> bool {
+    let combined = format!("{} {}", path, relative_path.unwrap_or_default())
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    combined.contains("models/unet/")
+        || combined.contains("models/diffusion_models/")
+        || combined.contains("/unet/")
+        || combined.contains("/diffusion_models/")
+}
+
 fn replace_workflow_placeholders(value: &mut Value, replacements: &[(&str, Value)]) {
     match value {
         Value::String(text) => {
@@ -2818,74 +2869,108 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
     if settings.comfyui_url.trim().is_empty() {
         return Err(AppError::ComfyUi("configure the ComfyUI URL in settings".into()));
     }
-    if settings.comfyui_workflow_json.trim().is_empty() {
-        return Err(AppError::ComfyUi("configure a ComfyUI API workflow template in settings".into()));
-    }
     let chapter = story.chapters.iter().find(|c| c.number == chapter_number).ok_or_else(|| AppError::ComfyUi("chapter not found".into()))?;
     let scene = chapter.scenes.iter().find(|s| s.id == scene_id).ok_or_else(|| AppError::ComfyUi("scene not found".into()))?;
     if scene.positive_prompt.trim().is_empty() {
         return Err(AppError::ComfyUi("build the scene prompt before queuing the image".into()));
     }
+
     let image_width = scene.image_width;
     let image_height = scene.image_height;
-    let mut workflow: Value = serde_json::from_str(&settings.comfyui_workflow_json)
-        .map_err(|e| AppError::ComfyUi(format!("workflow JSON is invalid: {e}")))?;
+    let positive_prompt = scene.positive_prompt.clone();
+    let negative_prompt = scene.negative_prompt.clone();
     let seed = (Uuid::new_v4().as_u128() & u64::MAX as u128) as u64;
-    let replacements = vec![
-        ("{{POSITIVE_PROMPT}}", Value::String(scene.positive_prompt.clone())),
-        ("{{NEGATIVE_PROMPT}}", Value::String(scene.negative_prompt.clone())),
-        ("{{SEED}}", Value::Number(serde_json::Number::from(seed))),
-        ("{{STORY_ID}}", Value::String(story.id.clone())),
-        ("{{SCENE_ID}}", Value::String(scene.id.clone())),
-        ("{{CHECKPOINT}}", Value::String(story.visual_config.checkpoint_file_name.clone())),
-    ];
-    let replacement_refs = replacements.iter().map(|(token, value)| (*token, value.clone())).collect::<Vec<_>>();
-    replace_workflow_placeholders(&mut workflow, &replacement_refs);
 
+    let use_unet_loader = checkpoint_uses_unet_loader(
+        &story.visual_config.checkpoint_file_path,
+        story.visual_config.checkpoint_relative_path.as_deref(),
+    );
+    let checkpoint_name = comfy_relative_model_name(
+        &story.visual_config.checkpoint_file_path,
+        story.visual_config.checkpoint_relative_path.as_deref(),
+        if use_unet_loader { "unet" } else { "checkpoints" },
+        &story.visual_config.checkpoint_file_name,
+    );
+
+    // Image Generator-compatible model order: locked style first, then the
+    // character-matched LoRAs selected for this scene. No generic dynamic LoRAs.
     let character_loras = scene
         .selected_loras
         .iter()
-        .filter(|l| l.role == "character")
+        .filter(|lora| lora.role == "character")
         .take(2)
         .collect::<Vec<_>>();
-    let concept_lora = scene.selected_loras.iter().find(|l| l.role == "concept_pose");
 
     let mut lora_stack = Vec::<workflow_builder::WorkflowLoraInput>::new();
     for lora in &story.visual_config.style_loras {
+        let file_name = comfy_relative_model_name(
+            &lora.file_path,
+            lora.relative_path.as_deref(),
+            "loras",
+            &lora.file_name,
+        );
         lora_stack.push(workflow_builder::WorkflowLoraInput {
-            file_name: lora.file_name.clone(),
+            file_name,
             weight: lora.weight,
             clip_weight: None,
         });
     }
     for lora in character_loras {
+        let file_name = comfy_relative_model_name(
+            &lora.file_path,
+            lora.relative_path.as_deref(),
+            "loras",
+            &lora.file_name,
+        );
         lora_stack.push(workflow_builder::WorkflowLoraInput {
-            file_name: lora.file_name.clone(),
-            weight: lora.weight,
-            clip_weight: None,
-        });
-    }
-    if let Some(lora) = concept_lora {
-        lora_stack.push(workflow_builder::WorkflowLoraInput {
-            file_name: lora.file_name.clone(),
+            file_name,
             weight: lora.weight,
             clip_weight: None,
         });
     }
 
-    emit_pipeline(store.app(), "workflow_builder", "started", format!("Building ComfyUI graph with {} LoRA(s)", lora_stack.len()));
-    // Tool boundary: the selector has finished. From here on the workflow builder
-    // deterministically creates one LoraLoader per selected LoRA and chains
-    // MODEL + CLIP through the complete ordered stack.
-    let built = workflow_builder::build_workflow(workflow_builder::WorkflowBuildRequest {
-        workflow,
-        lora_stack,
-        checkpoint_node: None,
-        image_width,
-        image_height,
-    })?;
+    let custom_workflow = !settings.comfyui_workflow_json.trim().is_empty();
+    let built = if custom_workflow {
+        let mut workflow: Value = serde_json::from_str(&settings.comfyui_workflow_json)
+            .map_err(|e| AppError::ComfyUi(format!("workflow JSON is invalid: {e}")))?;
+        let replacements = vec![
+            ("{{POSITIVE_PROMPT}}", Value::String(positive_prompt.clone())),
+            ("{{NEGATIVE_PROMPT}}", Value::String(negative_prompt.clone())),
+            ("{{SEED}}", Value::Number(serde_json::Number::from(seed))),
+            ("{{STORY_ID}}", Value::String(story.id.clone())),
+            ("{{SCENE_ID}}", Value::String(scene.id.clone())),
+            ("{{CHECKPOINT}}", Value::String(checkpoint_name.clone())),
+        ];
+        let replacement_refs = replacements.iter().map(|(token, value)| (*token, value.clone())).collect::<Vec<_>>();
+        replace_workflow_placeholders(&mut workflow, &replacement_refs);
+        emit_pipeline(store.app(), "workflow_builder", "started", format!("Building configured ComfyUI workflow with {} LoRA(s)", lora_stack.len()));
+        workflow_builder::build_workflow(workflow_builder::WorkflowBuildRequest {
+            workflow,
+            lora_stack,
+            checkpoint_node: None,
+            image_width,
+            image_height,
+        })?
+    } else {
+        emit_pipeline(store.app(), "workflow_builder", "started", format!("Building Raphael Image Generator workflow with {} LoRA(s)", lora_stack.len()));
+        workflow_builder::build_raphael_workflow(workflow_builder::RaphaelWorkflowRequest {
+            checkpoint_name,
+            use_unet_loader,
+            positive_prompt,
+            negative_prompt,
+            seed,
+            image_width,
+            image_height,
+            lora_stack,
+        })?
+    };
     let workflow = built.workflow;
-    emit_pipeline(store.app(), "workflow_builder", "completed", format!("Created {} LoRA loader node(s)", built.lora_node_ids.len()));
+    emit_pipeline(
+        store.app(),
+        "workflow_builder",
+        "completed",
+        format!("Created {} LoRA loader node(s){}", built.lora_node_ids.len(), if custom_workflow { " in the configured workflow" } else { " in the built-in Image Generator workflow" }),
+    );
     let comfyui_url = settings.comfyui_url.trim();
     if !(comfyui_url.starts_with("http://") || comfyui_url.starts_with("https://")) {
         return Err(AppError::ComfyUi("ComfyUI URL must start with http:// or https://".into()));
