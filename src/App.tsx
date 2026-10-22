@@ -778,6 +778,9 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
   const [ollamaDetecting, setOllamaDetecting] = useState(false);
   const [ollamaDetectionResult, setOllamaDetectionResult] = useState<string | null>(null);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [baseUrlModels, setBaseUrlModels] = useState<string[]>([]);
+  const [baseUrlModelsMessage, setBaseUrlModelsMessage] = useState<string | null>(null);
+  const [baseUrlModelsBusy, setBaseUrlModelsBusy] = useState(false);
   const [ollamaHost, setOllamaHost] = useState<OllamaLanHostStatus>({
     running: false, port: settings.ollama_lan_port, lan_url: null,
     openai_base_url: null, models: [], detail: 'Checking LAN host status…',
@@ -843,6 +846,42 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
     }
   };
 
+  const loadModelsFromBaseUrl = async () => {
+    setBaseUrlModelsBusy(true);
+    setBaseUrlModelsMessage(null);
+    try {
+      const configuredBase = draft.llm_base_url.trim().replace(/\\/+$/, '');
+      if (!configuredBase) throw new Error('Enter the Raphael/OpenAI-compatible Base URL first.');
+      const base = new URL(configuredBase);
+      if (base.protocol !== 'http:' && base.protocol !== 'https:') {
+        throw new Error('The Base URL must use HTTP or HTTPS.');
+      }
+      const path = base.pathname.replace(/\\/+$/, '');
+      base.pathname = path.toLowerCase().endsWith('/v1') ? `${path}/models` : `${path}/v1/models`;
+      base.search = '';
+      base.hash = '';
+      const response = await fetch(base.toString(), { headers: { Accept: 'application/json' } });
+      if (!response.ok) throw new Error(`Model list request failed: HTTP ${response.status} from ${base.toString()}`);
+      const payload = await response.json() as { data?: Array<{ id?: string; name?: string }>; models?: Array<{ name?: string; model?: string }> };
+      const models = Array.isArray(payload.data)
+        ? payload.data.map(item => item.id || item.name || '').filter(Boolean)
+        : Array.isArray(payload.models)
+          ? payload.models.map(item => item.name || item.model || '').filter(Boolean)
+          : [];
+      const uniqueModels = [...new Set(models)].sort((a, b) => a.localeCompare(b));
+      if (!uniqueModels.length) throw new Error('The configured Base URL returned no models. Ensure it points to the Raphael LAN host and supports GET /v1/models.');
+      setBaseUrlModels(uniqueModels);
+      const selected = uniqueModels.includes(draft.llm_model) ? draft.llm_model : uniqueModels[0];
+      setDraft(current => ({ ...current, llm_model: selected }));
+      setBaseUrlModelsMessage(`Loaded ${uniqueModels.length} model(s) from ${base.origin}.`);
+    } catch (error) {
+      setBaseUrlModels([]);
+      setBaseUrlModelsMessage(toErrorMessage(error));
+    } finally {
+      setBaseUrlModelsBusy(false);
+    }
+  };
+
   const startOllamaLanHost = async () => {
     setOllamaHostBusy(true);
     setOllamaHostMessage(null);
@@ -888,6 +927,15 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
       </div>
       {ollamaModels.length ? <label>Detected model<select value={draft.llm_model} onChange={e => setDraft({ ...draft, llm_model: e.target.value })}>{ollamaModels.map(model => <option value={model} key={model}>{model}</option>)}</select></label> : null}
       {ollamaDetectionResult ? <div className={ollamaDetectionResult.startsWith('Detected ') ? 'ollama-inline-result' : 'error-box'}>{ollamaDetectionResult}</div> : null}
+
+      <div className="section-head setting-gap">MODELS FROM CONFIGURED BASE URL</div>
+      <small className="settings-hint">Load the model list from the OpenAI-compatible Base URL above. On a LAN client, use the host's Raphael proxy URL ending in /v1; the dropdown queries that proxy's GET /v1/models route. It does not connect to or expose the host's Ollama port directly.</small>
+      <div className="ollama-action-row">
+        <button type="button" className="secondary-btn" onClick={() => void loadModelsFromBaseUrl()} disabled={baseUrlModelsBusy || ollamaHostBusy}>{baseUrlModelsBusy ? 'LOADING MODELS…' : 'LOAD MODELS FROM BASE URL'}</button>
+        {baseUrlModels.length ? <span className="tiny">{baseUrlModels.length} HOST MODEL(S)</span> : null}
+      </div>
+      {baseUrlModels.length ? <label>Available model<select value={baseUrlModels.includes(draft.llm_model) ? draft.llm_model : ''} onChange={e => setDraft(current => ({ ...current, llm_model: e.target.value }))}><option value="" disabled>Select a host model</option>{baseUrlModels.map(model => <option value={model} key={model}>{model}</option>)}</select></label> : null}
+      {baseUrlModelsMessage ? <div className={baseUrlModels.length ? 'ollama-inline-result' : 'error-box'}>{baseUrlModelsMessage}</div> : null}
 
       <div className="section-head setting-gap">HOST OLLAMA ON LAN</div>
       <small className="settings-hint">Share this PC's local Ollama models with devices on the same LAN without an API key or Bearer token. Raphael binds only to a detected private IPv4 address. This is unauthenticated plain HTTP: anyone who can reach this port can use the host's installed models. Use only on a trusted LAN, do not expose the port through router forwarding, and keep Ollama itself bound to 127.0.0.1:11434.</small>
