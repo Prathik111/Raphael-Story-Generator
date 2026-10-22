@@ -1832,14 +1832,18 @@ fn comfy_relative_model_name(path: &str, relative_path: Option<&str>, folder: &s
 }
 
 fn checkpoint_uses_unet_loader(path: &str, relative_path: Option<&str>) -> bool {
-    let combined = format!("{} {}", path, relative_path.unwrap_or_default())
-        .replace('\\', "/")
-        .to_ascii_lowercase();
-    // Treat the model directory as a path component. Registry paths often
-    // start with "diffusion_models/" or "unet/" without a leading slash.
-    combined
-        .split('/')
-        .any(|component| component == "unet" || component == "diffusion_models")
+    let uses_unet_directory = |value: &str| {
+        value
+            .replace('\\', "/")
+            .to_ascii_lowercase()
+            .split('/')
+            .any(|component| component == "unet" || component == "diffusion_models")
+    };
+
+    // Evaluate each path separately so a path separator is not hidden by the
+    // space used to join the absolute and Registry-relative path values.
+    uses_unet_directory(path)
+        || relative_path.map(uses_unet_directory).unwrap_or(false)
 }
 
 fn replace_workflow_placeholders(value: &mut Value, replacements: &[(&str, Value)]) {
