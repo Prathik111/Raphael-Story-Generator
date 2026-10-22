@@ -154,7 +154,7 @@ For a **custom workflow override**, paste a ComfyUI API-format workflow JSON tem
 - `{{IMAGE_HEIGHT}}`
 - `{{IMAGE_SIZE}}`
 
-The image-prompt LLM chooses one approved resolution for each scene (for example 1024×1024, 1216×832 or 832×1216). Raphael validates that choice and deterministically injects it into an Empty*Latent node or explicit size placeholders; a workflow without a valid size injection point is rejected instead of silently ignoring the requested size. The workflow itself still owns the checkpoint, LoRA, sampler and other generation nodes.
+The fixed image size is controlled in **Settings → ComfyUI → Fixed Image Size**, with a default of **1920×1080**. Width and height are applied to every scene; the image-prompt LLM cannot override the configured resolution. Each dimension must be between 512 and 4096 and divisible by 8, so landscape 1920×1080 and values such as 864 are accepted. Raphael injects the configured values into an Empty*Latent node or explicit size placeholders in custom workflows; a custom workflow without a valid size injection point is rejected.
 
 Use `"{{SEED}}"` as the complete value of a numeric seed field. Raphael converts that exact placeholder into a JSON number; embedded text such as `"seed={{SEED}}"` remains a string.
 
