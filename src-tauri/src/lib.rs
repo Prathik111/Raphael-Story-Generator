@@ -3833,7 +3833,7 @@ mod tests {
             "other/model.safetensors".to_string(),
         ];
         let candidates = vec![
-            r"other\\model.safetensors".to_string(),
+            r"other\model.safetensors".to_string(),
             "model.safetensors".to_string(),
         ];
         assert_eq!(
@@ -3845,7 +3845,7 @@ mod tests {
     #[test]
     fn comfy_model_matching_uses_unique_basename_when_registry_root_differs() {
         let available = vec!["nested/anima/model.safetensors".to_string()];
-        let candidates = vec![r"C:\\Registry\\artifacts\\model.safetensors".to_string()];
+        let candidates = vec![r"C:\Registry\artifacts\model.safetensors".to_string()];
         assert_eq!(
             find_comfy_model_match(&candidates, &available).as_deref(),
             Some("nested/anima/model.safetensors")
