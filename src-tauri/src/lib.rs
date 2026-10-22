@@ -221,6 +221,10 @@ pub struct VisualStyleLora {
     pub weight: f32,
     pub file_name: String,
     #[serde(default)]
+    pub file_path: String,
+    #[serde(default)]
+    pub relative_path: Option<String>,
+    #[serde(default)]
     pub version_id: Option<String>,
     #[serde(default)]
     pub file_id: Option<String>,
@@ -235,6 +239,10 @@ pub struct StoryVisualConfig {
     pub checkpoint_id: String,
     pub checkpoint_name: String,
     pub checkpoint_file_name: String,
+    #[serde(default)]
+    pub checkpoint_file_path: String,
+    #[serde(default)]
+    pub checkpoint_relative_path: Option<String>,
     #[serde(default)]
     pub checkpoint_version_id: Option<String>,
     #[serde(default)]
@@ -253,6 +261,10 @@ pub struct SceneLoraSelection {
     pub character: Option<String>,
     pub weight: f32,
     pub file_name: String,
+    #[serde(default)]
+    pub file_path: String,
+    #[serde(default)]
+    pub relative_path: Option<String>,
     #[serde(default)]
     pub version_id: Option<String>,
     #[serde(default)]
@@ -1937,6 +1949,8 @@ async fn create_story(
             name: model.name,
             weight: 0.75,
             file_name: artifact.file_name,
+            file_path: artifact.path,
+            relative_path: artifact.relative_path,
             version_id: artifact.version_id.clone(),
             file_id: Some(artifact.file_id.clone()),
             sha256: artifact.sha256.clone(),
@@ -1949,6 +1963,8 @@ async fn create_story(
         checkpoint_id: checkpoint.id.clone(),
         checkpoint_name: checkpoint.name.clone(),
         checkpoint_file_name: checkpoint_artifact.file_name.clone(),
+        checkpoint_file_path: checkpoint_artifact.path.clone(),
+        checkpoint_relative_path: checkpoint_artifact.relative_path.clone(),
         checkpoint_version_id: checkpoint_artifact.version_id.clone(),
         checkpoint_file_id: Some(checkpoint_artifact.file_id.clone()),
         checkpoint_sha256: checkpoint_artifact.sha256.clone(),
@@ -1959,6 +1975,8 @@ async fn create_story(
         version_id: item.version_id.clone(),
         file_id: item.file_id.clone().unwrap_or_default(),
         file_name: item.file_name.clone(),
+        path: item.file_path.clone(),
+        relative_path: item.relative_path.clone(),
         sha256: item.sha256.clone(),
         activation_prompts: item.activation_prompts.clone(),
     }).collect::<Vec<_>>();
@@ -2722,6 +2740,8 @@ async fn select_scene_loras(
             character: Some(character_name.clone()),
             weight: draft.weight.clamp(0.55, 1.0),
             file_name: artifact.file_name,
+            file_path: artifact.path,
+            relative_path: artifact.relative_path,
             version_id: artifact.version_id.clone(),
             file_id: Some(artifact.file_id.clone()),
             sha256: artifact.sha256.clone(),
@@ -2759,6 +2779,8 @@ async fn select_scene_loras(
             character: Some(character_name.clone()),
             weight: 0.85,
             file_name: artifact.file_name,
+            file_path: artifact.path,
+            relative_path: artifact.relative_path,
             version_id: artifact.version_id.clone(),
             file_id: Some(artifact.file_id.clone()),
             sha256: artifact.sha256.clone(),
