@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { AppSettings, AppState, ComfyGenerationEvent, LlmGenerationEvent, PipelineEvent, RegistryCatalog, RegistryStatusDto, SceneExtractionResult, ServiceStatusBoard, Story, StoryVisualSetup } from './types';
+import type { AppSettings, AppState, ComfyGenerationEvent, LlmGenerationEvent, OllamaLanHostStatus, OllamaModelDetection, PipelineEvent, RegistryCatalog, RegistryStatusDto, SceneExtractionResult, ServiceStatusBoard, Story, StoryVisualSetup } from './types';
 import type { WorkflowBuildResult, WorkflowLoraInput } from './types';
 
 export const isWebApp = typeof window !== 'undefined' && !(window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
@@ -47,6 +47,14 @@ export const api = {
   buildComfyUiWorkflow: (workflow: unknown, loraStack: WorkflowLoraInput[], checkpointNode: string | null, imageWidth: number, imageHeight: number) =>
     command<WorkflowBuildResult>('build_comfyui_workflow', { workflow, loraStack, checkpointNode, imageWidth, imageHeight }),
   testPrivateWebResearch: () => command<string>('test_private_web_research'),
+  detectOllamaModels: (configuredBaseUrl: string) =>
+    command<OllamaModelDetection>('detect_ollama_models', { configuredBaseUrl }),
+  startOllamaLanHost: (port: number, configuredBaseUrl: string) =>
+    command<OllamaLanHostStatus>('start_ollama_lan_host', { port, configuredBaseUrl }),
+  stopOllamaLanHost: (port: number) =>
+    command<OllamaLanHostStatus>('stop_ollama_lan_host', { port }),
+  getOllamaLanHostStatus: (port: number) =>
+    command<OllamaLanHostStatus>('get_ollama_lan_host_status', { port }),
   getSceneImage: (storyId: string, chapterNumber: number, sceneId: string) =>
     command<string | null>('get_scene_image', { storyId, chapterNumber, sceneId }),
   clearLlmApiKey: () => command<string>('clear_llm_api_key'),

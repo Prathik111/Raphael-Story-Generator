@@ -180,6 +180,7 @@ export interface AppSettings {
   web_fetch_max_chars: number;
   web_context_max_chars: number;
   web_research_system_prompt: string;
+  ollama_lan_port: number;
   comfyui_url: string;
   comfyui_workflow_json: string;
 }
@@ -296,4 +297,21 @@ export interface WorkflowBuildResult {
   workflow: unknown;
   lora_node_ids: string[];
   checkpoint_node: string;
+}
+
+
+export interface OllamaModelDetection {
+  base_url: string;
+  openai_base_url: string;
+  models: string[];
+}
+
+export interface OllamaLanHostStatus {
+  running: boolean;
+  port: number;
+  lan_url: string | null;
+  openai_base_url: string | null;
+  token: string | null;
+  models: string[];
+  detail: string | null;
 }

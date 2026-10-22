@@ -13,6 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "=2.6.3" }
 
 [dependencies]
+axum = "0.8"
 tauri = { version = "=2.11.6", features = ["devtools"] }
 tauri-runtime = "=2.11.3"
 tauri-runtime-wry = { version = "=2.11.4", default-features = false }
@@ -31,7 +32,7 @@ scraper = "0.24"
 url = "2"
 registry-client = { git = "https://github.com/Prathik111/Raphael-Model-Registry.git", rev = "5d9a8ca73238eac87689143fb685f55e0c42dc19", package = "registry-client" }
 registry-core = { git = "https://github.com/Prathik111/Raphael-Model-Registry.git", rev = "5d9a8ca73238eac87689143fb685f55e0c42dc19", package = "registry-core" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "sync"] }
 thiserror = "2"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 keyring = { version = "3.6", default-features = false, features = ["windows-native"] }

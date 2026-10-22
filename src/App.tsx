@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, subscribeToComfy, subscribeToLlm, subscribeToPipeline } from './tauri';
-import type { AppSettings, AppState, Chapter, ComfyGenerationEvent, LlmGenerationEvent, PipelineEvent, RegistryCatalog, RegistryStatusDto, Scene, ServiceStatusBoard, Story, StoryVisualSetup } from './types';
+import type { AppSettings, AppState, Chapter, ComfyGenerationEvent, LlmGenerationEvent, OllamaLanHostStatus, PipelineEvent, RegistryCatalog, RegistryStatusDto, Scene, ServiceStatusBoard, Story, StoryVisualSetup } from './types';
 
 function ReferenceHudBackground() {
   return <iframe className="raphael-bg" src="./reference/index.html" title="Raphael background" aria-hidden="true" />;
@@ -731,12 +731,67 @@ function GenerationMonitor({
   </section>;
 }
 
+function ResearchActivityPanel({ pipeline, generations }: {
+  pipeline: PipelineEvent[];
+  generations: GenerationTrace[];
+}) {
+  const events = pipeline.filter(event =>
+    event.stage.includes('research') || event.stage.startsWith('web_') || event.stage === 'web_gateway'
+  );
+  const latest = events.slice(-16);
+  const liveTrace = generations.slice().reverse().find(trace => trace.stage === 'web_research');
+  const activeEvent = latest.slice().reverse().find(event => event.status === 'started');
+  const query = liveTrace?.user_prompt.match(/RESEARCH QUERY:\s*([^\r\n]+)/i)?.[1]?.trim();
+
+  return <section className="hud-panel inspector-panel live-research-activity" aria-live="polite">
+    <div className="panel-title-row">
+      <div>
+        <div className="section-head">LIVE RESEARCH TRACE</div>
+        <span className="tiny">{activeEvent ? 'WORKING · ' + activeEvent.stage.replaceAll('_', ' ').toUpperCase() : 'SEARCH · TOR FETCH · EVIDENCE CHECK'}</span>
+      </div>
+      <span className={'trace-live ' + (activeEvent ? 'active' : '')}><i />{activeEvent ? 'LIVE' : 'TRACE'}</span>
+    </div>
+    {query ? <div className="live-research-query"><span className="section-head">CURRENT QUERY</span><p>{query}</p></div> : null}
+    {latest.length
+      ? <div className="live-research-log">
+          {latest.map(event => <article className={'live-research-event ' + event.status} key={event.event_id}>
+            <div><span>{event.stage.replaceAll('_', ' ').toUpperCase()}</span><small>{event.status.toUpperCase()}</small></div>
+            <p>{event.message}</p>
+          </article>)}
+        </div>
+      : <div className="registry-empty">No research activity in this session yet. Use a prompt naming an external character, series, world, or topic, then start story generation.</div>}
+    {liveTrace ? <details className="live-research-raw">
+      <summary><span className="section-head">EXTRACTOR LLM RESPONSE</span><small>{liveTrace.status.toUpperCase()}</small></summary>
+      <pre className="trace-box response">{formatTraceText(liveTrace.response || '(waiting for the extractor response)', true)}</pre>
+      {liveTrace.error ? <div className="error-box">{liveTrace.error}</div> : null}
+    </details> : null}
+    <p className="settings-hint live-research-footnote">Search and source events remain visible while story creation is in progress. Validated source cards and evidence appear in the story research panel after creation finishes.</p>
+  </section>;
+}
+
 function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey, onClose, onError }: { settings: AppSettings; llmApiKeyConfigured: boolean; onSave: (settings: AppSettings) => Promise<void>; onClearApiKey: () => Promise<void>; onClose: () => void; onError: (message: string) => void }) {
   const [draft, setDraft] = useState(settings);
   const [busy, setBusy] = useState(false);
   const [researchTesting, setResearchTesting] = useState(false);
   const [researchTestResult, setResearchTestResult] = useState<string | null>(null);
+  const [ollamaDetecting, setOllamaDetecting] = useState(false);
+  const [ollamaDetectionResult, setOllamaDetectionResult] = useState<string | null>(null);
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [ollamaHost, setOllamaHost] = useState<OllamaLanHostStatus>({
+    running: false, port: settings.ollama_lan_port, lan_url: null,
+    openai_base_url: null, token: null, models: [], detail: 'Checking LAN host status…',
+  });
+  const [ollamaHostBusy, setOllamaHostBusy] = useState(false);
+  const [ollamaHostMessage, setOllamaHostMessage] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    void api.getOllamaLanHostStatus(settings.ollama_lan_port)
+      .then(status => { if (!disposed) setOllamaHost(status); })
+      .catch(error => { if (!disposed) setOllamaHostMessage(toErrorMessage(error)); });
+    return () => { disposed = true; };
+  }, []);
 
   const save = async () => {
     setBusy(true);
@@ -764,6 +819,66 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
       setResearchTesting(false);
     }
   };
+
+  const detectOllamaModels = async () => {
+    setOllamaDetecting(true);
+    setOllamaDetectionResult(null);
+    try {
+      const detected = await api.detectOllamaModels(draft.llm_base_url);
+      const selected = detected.models.includes(draft.llm_model)
+        ? draft.llm_model
+        : detected.models[0];
+      setOllamaModels(detected.models);
+      setDraft(current => ({
+        ...current,
+        llm_base_url: detected.openai_base_url,
+        llm_model: selected || current.llm_model,
+      }));
+      setOllamaDetectionResult(`Detected ${detected.models.length} local model(s) at ${detected.base_url}. Selected ${selected || detected.models[0]}.`);
+    } catch (error) {
+      setOllamaDetectionResult(toErrorMessage(error));
+    } finally {
+      setOllamaDetecting(false);
+    }
+  };
+
+  const startOllamaLanHost = async () => {
+    setOllamaHostBusy(true);
+    setOllamaHostMessage(null);
+    try {
+      const status = await api.startOllamaLanHost(draft.ollama_lan_port, draft.llm_base_url);
+      setOllamaHost(status);
+      setOllamaHostMessage(status.detail || 'Ollama LAN host started.');
+    } catch (error) {
+      setOllamaHostMessage(toErrorMessage(error));
+    } finally {
+      setOllamaHostBusy(false);
+    }
+  };
+
+  const stopOllamaLanHost = async () => {
+    setOllamaHostBusy(true);
+    setOllamaHostMessage(null);
+    try {
+      const status = await api.stopOllamaLanHost(ollamaHost.port || draft.ollama_lan_port);
+      setOllamaHost(status);
+      setOllamaHostMessage('Ollama LAN host stopped.');
+    } catch (error) {
+      setOllamaHostMessage(toErrorMessage(error));
+    } finally {
+      setOllamaHostBusy(false);
+    }
+  };
+
+  const copyOllamaHostToken = async () => {
+    if (!ollamaHost.token) return;
+    try {
+      await navigator.clipboard.writeText(ollamaHost.token);
+      setOllamaHostMessage('LAN access token copied to the clipboard.');
+    } catch (error) {
+      setOllamaHostMessage('Clipboard access failed: ' + toErrorMessage(error));
+    }
+  };
   return <div className="settings-backdrop" onMouseDown={onClose}><section className="settings-panel hud-panel" onMouseDown={e => e.stopPropagation()}>
     <header className="settings-header"><div><div className="eyebrow">RAPHAEL CORE</div><h2>ENGINE SETTINGS</h2></div><button className="settings-close" onClick={onClose}>×</button></header>
     <div className="settings-scroll">
@@ -771,6 +886,33 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
       <label>Base URL<input value={draft.llm_base_url} onChange={e => setDraft({ ...draft, llm_base_url: e.target.value })} placeholder="http://127.0.0.1:11434/v1"/></label>
       <label>Model<input value={draft.llm_model} onChange={e => setDraft({ ...draft, llm_model: e.target.value })} placeholder="qwen3:8b"/></label>
       <label>API key<input type="password" value={draft.llm_api_key} onChange={e => setDraft({ ...draft, llm_api_key: e.target.value })} placeholder={llmApiKeyConfigured ? 'Stored securely · leave blank to keep current key' : 'Optional for local endpoints'}/>{llmApiKeyConfigured ? <button type="button" className="mini-btn settings-clear-key" onClick={() => void onClearApiKey()}>CLEAR STORED KEY</button> : null}</label>
+
+      <div className="section-head setting-gap">OLLAMA AUTO-DETECTION</div>
+      <small className="settings-hint">Detects models from a local Ollama API only. The selected model and OpenAI-compatible URL are filled into the fields above; detection does not query remote endpoints.</small>
+      <div className="ollama-action-row">
+        <button type="button" className="secondary-btn" onClick={() => void detectOllamaModels()} disabled={ollamaDetecting || ollamaHostBusy}>{ollamaDetecting ? 'SCANNING…' : 'DETECT LOCAL MODELS'}</button>
+        {ollamaModels.length ? <span className="tiny">{ollamaModels.length} MODEL(S)</span> : null}
+      </div>
+      {ollamaModels.length ? <label>Detected model<select value={draft.llm_model} onChange={e => setDraft({ ...draft, llm_model: e.target.value })}>{ollamaModels.map(model => <option value={model} key={model}>{model}</option>)}</select></label> : null}
+      {ollamaDetectionResult ? <div className={ollamaDetectionResult.startsWith('Detected ') ? 'ollama-inline-result' : 'error-box'}>{ollamaDetectionResult}</div> : null}
+
+      <div className="section-head setting-gap">HOST OLLAMA ON LAN</div>
+      <small className="settings-hint">Share this PC's local Ollama models with trusted devices on the same LAN. Raphael binds only to a detected private IPv4 address and requires a bearer token. This is plain HTTP, not encrypted transport; do not expose the port through router forwarding or use it on an untrusted network.</small>
+      <label>LAN port<input type="number" min="1024" max="65535" step="1" value={draft.ollama_lan_port} onChange={e => setDraft({ ...draft, ollama_lan_port: Math.max(1024, Math.min(65535, Number(e.target.value) || 11435)) }} disabled={ollamaHost.running || ollamaHostBusy}/></label>
+      <div className="ollama-action-row">
+        {ollamaHost.running
+          ? <button type="button" className="secondary-btn" onClick={() => void stopOllamaLanHost()} disabled={ollamaHostBusy}>{ollamaHostBusy ? 'STOPPING…' : 'STOP LAN HOST'}</button>
+          : <button type="button" className="primary-btn" onClick={() => void startOllamaLanHost()} disabled={ollamaHostBusy || ollamaDetecting}>{ollamaHostBusy ? 'STARTING…' : 'HOST OLLAMA ON LAN'}</button>}
+        <span className={'trace-live ' + (ollamaHost.running ? 'active' : '')}><i />{ollamaHost.running ? 'HOSTING' : 'STOPPED'}</span>
+      </div>
+      {ollamaHost.running ? <div className="ollama-host-details">
+        <div><span className="section-head">OPENAI-COMPATIBLE BASE URL</span><code>{ollamaHost.openai_base_url}</code></div>
+        <div><span className="section-head">BEARER TOKEN / API KEY</span><code className="ollama-host-token">{ollamaHost.token}</code><button type="button" className="mini-btn" onClick={() => void copyOllamaHostToken()}>COPY TOKEN</button></div>
+        <div><span className="section-head">HOST MODELS</span><p>{ollamaHost.models.join(' · ')}</p></div>
+        <small className="settings-hint">On another device, set its LLM Base URL to the address above and its API key to this token. The proxy only allows inference and read-only model-list routes; pulling or deleting host models is blocked.</small>
+      </div> : null}
+      {ollamaHostMessage ? <div className={ollamaHost.running && ollamaHostMessage.includes('running') ? 'ollama-inline-result' : 'settings-inline-error error-box'}>{ollamaHostMessage}</div> : null}
+
       <label>Temperature<input type="number" min="0" max="2" step="0.1" value={draft.temperature} onChange={e => setDraft({ ...draft, temperature: Number(e.target.value) || 0 })}/></label>
       <div className="section-head setting-gap">SYSTEM PROMPTS · FULLY CUSTOMIZABLE</div>
       <small className="settings-hint">These prompts are sent as the system message for each LLM generation stage. They are persisted with the application settings and shown live in the Generation Trace.</small>
@@ -791,7 +933,7 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
       </div>
       <label>Research context limit<input type="number" min="8000" max="48000" step="1000" value={draft.web_context_max_chars} onChange={e => setDraft({ ...draft, web_context_max_chars: Number(e.target.value) || 8000 })}/></label>
       <label>Research Extractor<small className="settings-hint">The extractor receives fetched page text and must cite every extracted fact by source ID.</small><textarea className="system-prompt-input" value={draft.web_research_system_prompt} onChange={e => setDraft({ ...draft, web_research_system_prompt: e.target.value })}/></label>
-      <div className="research-test-row"><button type="button" className="secondary-btn" onClick={() => void testPrivateResearch()} disabled={researchTesting}>{researchTesting ? 'CHECKING…' : 'TEST PRIVATE GATEWAY'}</button>{researchTestResult ? <span className="tiny">{researchTestResult}</span> : null}</div>
+      <div className="research-test-row"><button type="button" className="secondary-btn" onClick={() => void testPrivateResearch()} disabled={researchTesting}>{researchTesting ? 'TESTING…' : 'TEST FULL RESEARCH PIPELINE'}</button>{researchTestResult ? <span className="tiny">{researchTestResult}</span> : null}</div>
 
       <div className="section-head setting-gap">COMFYUI</div>
       <label>API URL<input value={draft.comfyui_url} onChange={e => setDraft({ ...draft, comfyui_url: e.target.value })} placeholder="http://127.0.0.1:8188"/></label>
@@ -1329,6 +1471,7 @@ export default function App() {
           pipeline={pipelineTrace}
           onClear={() => { setGenerationTraces([]); setPipelineTrace([]); }}
         />
+        <ResearchActivityPanel pipeline={pipelineTrace} generations={generationTraces}/>
         {story ? <ResearchPanel story={story} researchTrace={researchTrace}/> : null}
         {story ? <MetadataPanel story={story}/> : null}
       </aside>

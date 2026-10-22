@@ -2,6 +2,7 @@ mod comfyui;
 mod privacy_gateway;
 mod registry;
 mod research;
+mod ollama_host;
 mod service_status;
 mod workflow_builder;
 
@@ -113,6 +114,7 @@ fn default_web_proxy_url() -> String { "socks5h://127.0.0.1:9050".into() }
 fn default_web_search_max_results() -> usize { 8 }
 fn default_web_fetch_max_chars() -> usize { 12_000 }
 fn default_web_context_max_chars() -> usize { 36_000 }
+fn default_ollama_lan_port() -> u16 { 11435 }
 fn default_web_research_system_prompt() -> String {
     research::DEFAULT_WEB_RESEARCH_SYSTEM_PROMPT.to_string()
 }
@@ -147,6 +149,8 @@ pub struct AppSettings {
     pub web_context_max_chars: usize,
     #[serde(default = "default_web_research_system_prompt")]
     pub web_research_system_prompt: String,
+    #[serde(default = "default_ollama_lan_port")]
+    pub ollama_lan_port: u16,
     pub comfyui_url: String,
     pub comfyui_workflow_json: String,
 }
@@ -171,6 +175,7 @@ impl Default for AppSettings {
             web_fetch_max_chars: default_web_fetch_max_chars(),
             web_context_max_chars: default_web_context_max_chars(),
             web_research_system_prompt: default_web_research_system_prompt(),
+            ollama_lan_port: default_ollama_lan_port(),
             comfyui_url: "http://127.0.0.1:8188".into(),
             comfyui_workflow_json: String::new(),
         }
@@ -1725,6 +1730,9 @@ fn validate_settings(settings: &AppSettings) -> AppResult<()> {
         return Err(AppError::Llm("temperature must be between 0 and 2".into()));
     }
     validate_image_size(settings.image_width, settings.image_height)?;
+    if settings.ollama_lan_port < 1024 {
+        return Err(AppError::Llm("Ollama LAN host port must be between 1024 and 65535".into()));
+    }
     if settings.web_search_max_results == 0 || settings.web_search_max_results > 12 {
         return Err(AppError::WebResearch("web search results must be between 1 and 12".into()));
     }
@@ -2235,6 +2243,12 @@ async fn create_story(
             ResearchBundle::default()
         }
     } else {
+        emit_pipeline(
+            store.app(),
+            "web_research",
+            "skipped",
+            "Web research is disabled in Settings; generating without external sources",
+        );
         ResearchBundle::default()
     };
 
@@ -2513,6 +2527,13 @@ Text: {}", c.title, c.summary, c.events, c.text)).unwrap_or_default();
         } else {
             emit_pipeline(store.app(), "web_research", "skipped", format!("No explicit research subject was found in the Chapter {} directive; continuing without web research", next_number));
         }
+    } else {
+        emit_pipeline(
+            store.app(),
+            "web_research",
+            "skipped",
+            format!("Web research is disabled in Settings for Chapter {}; continuing without external research", next_number),
+        );
     }
 
     let schema = r#"{"title":"","summary":"","text":"","events":[],"continuity_updates":[],"new_characters":[{"name":"","role":"","personality":[],"appearance":"","clothing":"","motivations":[]}],"character_state_updates":[{"character_id":"","current_state":"","clothing":""}],"relationship_updates":[{"source_character":"","target_character":"","relation_type":"","description":""}],"open_threads":[]}"#;
@@ -3389,10 +3410,80 @@ async fn get_service_status(
 
 #[tauri::command]
 async fn test_private_web_research(store: State<'_, Store>) -> AppResult<String> {
-    let settings = store.settings.read().map_err(|e| AppError::Storage(e.to_string()))?.clone();
+    let mut settings = store.settings.read().map_err(|e| AppError::Storage(e.to_string()))?.clone();
+    settings.web_research_enabled = true;
+
+    emit_pipeline(store.app(), "web_research", "started", "Running full private research smoke test");
+    emit_pipeline(store.app(), "web_gateway", "started", "Checking the local SearXNG gateway and verifying Tor egress");
     privacy_gateway::ensure_started_with_settings(store.app(), &settings).await?;
+    research::check_private_search(&settings).await?;
     research::check_search_api(&settings).await?;
-    Ok("Private web research gateway is running, Tor routing is verified, and SearXNG returned usable search results.".into())
+    emit_pipeline(store.app(), "web_gateway", "completed", "SearXNG API and Tor egress checks passed");
+
+    let bundle = match research::research_web(
+        store.app(),
+        &settings,
+        "OpenAI official API documentation",
+    ).await {
+        Ok(bundle) if !bundle.sources.is_empty() => bundle,
+        Ok(_) => {
+            let error = AppError::WebResearch("full research test returned no usable sources".into());
+            emit_pipeline(store.app(), "web_research", "error", error.to_string());
+            return Err(error);
+        }
+        Err(error) => {
+            emit_pipeline(store.app(), "web_research", "error", error.to_string());
+            return Err(error);
+        }
+    };
+
+    let message = format!(
+        "Full private research test passed: Tor route verified; SearXNG search succeeded; {} source(s) were fetched or retained as snippet fallbacks; {} evidence-validated fact(s) were extracted.",
+        bundle.sources.len(),
+        bundle.facts.len()
+    );
+    emit_pipeline(store.app(), "web_research", "completed", message.clone());
+    Ok(message)
+}
+
+#[tauri::command]
+async fn detect_ollama_models(
+    configured_base_url: String,
+    store: State<'_, Store>,
+) -> AppResult<ollama_host::OllamaModelDetection> {
+    let settings = store.settings.read()
+        .map_err(|error| AppError::Storage(error.to_string()))?
+        .clone();
+    ollama_host::detect_models(&settings, Some(&configured_base_url)).await
+}
+
+#[tauri::command]
+async fn start_ollama_lan_host(
+    port: u16,
+    configured_base_url: String,
+    store: State<'_, Store>,
+    host: State<'_, ollama_host::OllamaLanHost>,
+) -> AppResult<ollama_host::OllamaLanHostStatus> {
+    let settings = store.settings.read()
+        .map_err(|error| AppError::Storage(error.to_string()))?
+        .clone();
+    ollama_host::start_host(&host, &settings, Some(&configured_base_url), port).await
+}
+
+#[tauri::command]
+fn stop_ollama_lan_host(
+    port: u16,
+    host: State<'_, ollama_host::OllamaLanHost>,
+) -> AppResult<ollama_host::OllamaLanHostStatus> {
+    ollama_host::stop_host(&host, port)
+}
+
+#[tauri::command]
+fn get_ollama_lan_host_status(
+    port: u16,
+    host: State<'_, ollama_host::OllamaLanHost>,
+) -> AppResult<ollama_host::OllamaLanHostStatus> {
+    ollama_host::status(&host, port)
 }
 
 pub fn run() {
@@ -3400,6 +3491,7 @@ pub fn run() {
         .setup(|app| {
             let registry = registry::RegistryState::new(app.handle());
             app.manage(registry);
+            app.manage(ollama_host::OllamaLanHost::default());
             let store = Store::new(app.handle()).map_err(|e| {
                 std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
             })?;
@@ -3448,7 +3540,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_app_state, get_story, get_settings, save_settings, clear_llm_api_key, create_story, generate_next_chapter, extract_scenes, build_scene_prompt, queue_scene_image, get_scene_image, build_comfyui_workflow, test_private_web_research, get_service_status, get_registry_model_thumbnails, registry::ensure_registry, registry::get_registry_status, registry::get_registry_models])
+        .invoke_handler(tauri::generate_handler![get_app_state, get_story, get_settings, save_settings, clear_llm_api_key, create_story, generate_next_chapter, extract_scenes, build_scene_prompt, queue_scene_image, get_scene_image, build_comfyui_workflow, test_private_web_research, get_service_status, get_registry_model_thumbnails, detect_ollama_models, start_ollama_lan_host, stop_ollama_lan_host, get_ollama_lan_host_status, registry::ensure_registry, registry::get_registry_status, registry::get_registry_models])
         .run(tauri::generate_context!())
         .expect("error while running Raphael Story Generator");
 }

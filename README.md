@@ -54,7 +54,7 @@ The default endpoints are `http://127.0.0.1:8080` for SearXNG and `socks5h://127
 
 The web-research extractor requires every factual claim to include source IDs and evidence. The Story Architect receives those source-backed facts and source URLs rather than being told to rely on its pretrained knowledge for external facts.
 
-Privacy boundary: the search and source-fetch path can be kept local/Tor, but an LLM configured to a remote provider will still receive the user prompt and extracted research as part of generation. For end-to-end local privacy, use a local LLM endpoint such as Ollama together with the private gateway.
+Privacy boundary: the SearXNG and Tor host ports are bound to `127.0.0.1`, and the app's default Registry/Ollama endpoints use loopback. However, user-configured LLM, ComfyUI, or Registry URLs can point to other machines or remote providers; those endpoints are not automatically local. A remote LLM receives the user prompt and extracted research. For end-to-end local privacy, use local Ollama and ComfyUI, and the bundled private research gateway. The optional Ollama LAN host is the sole intentionally LAN-listening service added by this feature; it is private-address-bound and token-protected, but does not encrypt traffic.
 
 ## LLM configuration
 
@@ -64,7 +64,7 @@ The engine uses an OpenAI-compatible `/chat/completions` endpoint so it can poin
 - Model: `qwen3:8b`
 - API key: optional
 
-Every LLM generation requests streaming when supported by the provider. The Tauri backend emits token/delta events to the frontend, where the Live Generation Trace shows the exact system prompt, exact user prompt, model, live response, completion state and errors for every generation stage.
+Every LLM generation requests streaming when supported by the provider. The Tauri backend emits token/delta events to the frontend, where the Live Generation Trace shows the exact system prompt, exact user prompt, model, live response, completion state and errors for every generation stage. A dedicated Live Research Trace on the right also shows the active search, gateway, page-fetch and evidence-validation stages while a story is still being created. The Settings research smoke test checks Tor egress, executes a real SearXNG search, fetches sources and runs the research extractor; it does not just check whether a port is open.
 
 The Engine Settings panel exposes a separate editable system prompt for each stage:
 
@@ -77,6 +77,12 @@ The Engine Settings panel exposes a separate editable system prompt for each sta
 
 Web research settings include the local SearXNG URL, local Tor/SOCKS5 proxy, fail-closed proxy requirement, result/source limits, and research extractor prompt. These settings are persisted with the local application settings.
 
+
+### Ollama model detection and LAN hosting
+
+Settings can discover installed models from a local Ollama `/api/tags` endpoint and fill the OpenAI-compatible base URL and model selection automatically. The optional **Host Ollama on LAN** button starts an authenticated, OpenAI-compatible inference proxy on a detected private IPv4 address and configurable port (default `11435`). The proxy uses the host PC's local Ollama models, requires a generated Bearer token/API key, and only exposes inference and read-only model-list routes; model pull, delete, and other management endpoints are blocked. On another trusted LAN device, use the displayed `http://<HOST-LAN-IP>:<PORT>/v1` as the LLM base URL and the displayed token as its API key. Stop hosting from Settings when no longer needed.
+
+The proxy binds to one private interface address instead of `0.0.0.0`, so it does not listen on every network interface. It uses plain HTTP and does not encrypt prompts or responses; only use it on a trusted LAN, keep the token private, and do not configure router port forwarding. Windows Firewall may need an inbound allow rule for the chosen port. As with any configured endpoint, external router/VPN routing can change who is able to reach a private-address service.
 
 ### Live service health
 
