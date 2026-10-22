@@ -334,6 +334,12 @@ fn allowed_method_path(method: &Method, raw_path: &str) -> bool {
         ("GET", "v1")
         | ("GET", "v1/models")
         | ("POST", "v1/chat/completions")
+        // Also accept OpenAI SDKs configured with a host root instead of /v1.
+        | ("GET", "models")
+        | ("POST", "chat/completions")
+        | ("POST", "completions")
+        | ("POST", "embeddings")
+        | ("POST", "responses")
         | ("POST", "v1/completions")
         | ("POST", "v1/embeddings")
         | ("POST", "v1/responses")
@@ -346,7 +352,8 @@ fn allowed_method_path(method: &Method, raw_path: &str) -> bool {
         | ("GET", "api/version") => true,
         // A read-only model lookup is safe; mutations and model management
         // endpoints such as /api/pull, /api/delete and /api/push stay blocked.
-        ("GET", path) if path.starts_with("v1/models/") && path.len() > "v1/models/".len() => true,
+        ("GET", path) if (path.starts_with("v1/models/") && path.len() > "v1/models/".len())
+            || (path.starts_with("models/") && path.len() > "models/".len()) => true,
         _ => false,
     }
 }
@@ -409,9 +416,17 @@ async fn proxy(
     // not become a 404 at the Ollama upstream. Some clients probe GET /v1;
     // answer that as the standard model-list endpoint.
     let upstream_path = if parts.method == Method::GET && path == "v1" {
-        "v1/models"
+        "v1/models".to_string()
+    } else if path == "models"
+        || path.starts_with("models/")
+        || path == "chat/completions"
+        || path == "completions"
+        || path == "embeddings"
+        || path == "responses"
+    {
+        format!("v1/{path}")
     } else {
-        path
+        path.to_string()
     };
     let query = parts.uri.query().map(|value| format!("?{value}")).unwrap_or_default();
     let url = format!("{}/{}{}", state.upstream.as_str().trim_end_matches('/'), upstream_path, query);
@@ -476,6 +491,8 @@ mod tests {
         assert!(allowed_method_path(&Method::GET, "/v1"));
         assert!(allowed_method_path(&Method::POST, "/v1/chat/completions/"));
         assert!(allowed_method_path(&Method::POST, "v1/responses"));
+        assert!(allowed_method_path(&Method::POST, "chat/completions"));
+        assert!(allowed_method_path(&Method::GET, "models"));
         assert!(allowed_method_path(&Method::GET, "api/tags"));
         assert!(!allowed_method_path(&Method::POST, "api/pull"));
         assert!(!allowed_method_path(&Method::POST, "api/delete"));
