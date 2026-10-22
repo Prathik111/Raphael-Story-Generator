@@ -894,11 +894,14 @@ async fn chat(
         ]
     });
 
-    // Request a visible provider-emitted reasoning stream for thinking-capable
-    // Ollama models. The final answer remains in delta.content/message.content.
+    // Story-generation stages require the structured answer in the content field.
+    // With thinking enabled, some Ollama reasoning models (including Qwen3.5)
+    // can return empty content or spend the output budget in the reasoning field.
+    // On Ollama's OpenAI-compatible API, "none" disables thinking and keeps the
+    // JSON response in the normal content field for reliable parsing.
     let lower_base = base.to_ascii_lowercase();
     if lower_base.contains("11434") || lower_base.contains("ollama") {
-        body["reasoning_effort"] = json!("medium");
+        body["reasoning_effort"] = json!("none");
         body["response_format"] = json!({"type": "json_object"});
         body["max_tokens"] = json!(8192);
     }
