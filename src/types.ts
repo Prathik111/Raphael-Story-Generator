@@ -171,6 +171,8 @@ export interface AppSettings {
   scene_director_system_prompt: string;
   lora_selector_system_prompt: string;
   image_prompt_generator_system_prompt: string;
+  image_width: number;
+  image_height: number;
   web_research_enabled: boolean;
   web_search_url: string;
   web_proxy_url: string;
