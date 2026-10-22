@@ -82,6 +82,7 @@ struct RegistryInner {
     executable: Option<PathBuf>,
     #[allow(dead_code)]
     source_manifest: Option<PathBuf>,
+    remote_configured: bool,
     http: reqwest::Client,
     starting: AtomicBool,
     last_error: RwLock<Option<String>>,
@@ -94,14 +95,31 @@ impl RegistryState {
             .and_then(|value| value.parse::<u16>().ok())
             .unwrap_or(DEFAULT_PORT);
         let data_dir = registry_data_dir();
-        let (executable, source_manifest) = locate_registry(app);
+        let token_path = env::var_os("RAPHAEL_REGISTRY_TOKEN_FILE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| data_dir.join("registry.token"));
+        // Match Raphael Image Generator: an explicit URL means the Registry is
+        // managed elsewhere, so never launch a second local Registry instance.
+        let configured_url = env::var("RAPHAEL_REGISTRY_URL")
+            .ok()
+            .map(|value| value.trim().trim_end_matches('/').to_string())
+            .filter(|value| !value.is_empty());
+        let remote_configured = configured_url.is_some();
+        let base_url = configured_url
+            .unwrap_or_else(|| format!("http://127.0.0.1:{port}"));
+        let (executable, source_manifest) = if remote_configured {
+            (None, None)
+        } else {
+            locate_registry(app)
+        };
 
         Self {
             inner: Arc::new(RegistryInner {
-                base_url: format!("http://127.0.0.1:{port}"),
-                token_path: data_dir.join("registry.token"),
+                base_url,
+                token_path,
                 executable,
                 source_manifest,
+                remote_configured,
                 http: reqwest::Client::builder()
                     .connect_timeout(Duration::from_millis(800))
                     .timeout(Duration::from_secs(2))
@@ -111,6 +129,30 @@ impl RegistryState {
                 last_error: RwLock::new(None),
             }),
         }
+    }
+
+    fn read_token(&self) -> Result<String, String> {
+        if let Ok(value) = env::var("RAPHAEL_REGISTRY_AUTH_TOKEN") {
+            let value = value.trim().to_string();
+            if !value.is_empty() {
+                return Ok(value);
+            }
+        }
+
+        let value = std::fs::read_to_string(&self.inner.token_path)
+            .map_err(|error| format!(
+                "failed to read Raphael Model Registry token from {}: {error}",
+                self.inner.token_path.display()
+            ))?
+            .trim()
+            .to_string();
+        if value.is_empty() {
+            return Err(format!(
+                "Raphael Model Registry token is empty: {}",
+                self.inner.token_path.display()
+            ));
+        }
+        Ok(value)
     }
 
     async fn health(&self) -> bool {
@@ -156,6 +198,14 @@ impl RegistryState {
     async fn ensure_running(&self) -> RegistryStatusDto {
         if self.health().await {
             self.set_error(None);
+            return self.status().await;
+        }
+
+        if self.inner.remote_configured {
+            self.set_error(Some(format!(
+                "Configured remote Registry at {} is unavailable; no local Registry was started",
+                self.inner.base_url
+            )));
             return self.status().await;
         }
 
@@ -252,8 +302,10 @@ impl RegistryState {
             }
         }
 
-        RegistryClient::from_token_file(&self.inner.base_url, &self.inner.token_path)
-            .map_err(|error| AppError::Registry(format!("Registry authentication is unavailable: {error}")))
+        let token = self.read_token()
+            .map_err(|error| AppError::Registry(format!("Registry authentication is unavailable: {error}")))?;
+        RegistryClient::new(self.inner.base_url.clone(), token)
+            .map_err(|error| AppError::Registry(format!("Registry client could not be initialized: {error}")))
     }
 
     async fn catalog(&self) -> AppResult<RegistryCatalogDto> {
@@ -291,10 +343,8 @@ impl RegistryState {
             url.push_str(&format!("?type={}", model_type));
         }
 
-        let token = std::fs::read_to_string(&self.inner.token_path)
-            .map_err(|error| AppError::Registry(format!("failed to read Registry token: {error}")))?
-            .trim()
-            .to_string();
+        let token = self.read_token()
+            .map_err(|error| AppError::Registry(format!("failed to read Registry token: {error}")))?;
         let response = self.inner.http
             .get(url)
             .bearer_auth(token.trim())
@@ -422,9 +472,18 @@ fn registry_data_dir() -> PathBuf {
         return PathBuf::from(path);
     }
 
+    // Keep token discovery aligned with Raphael Image Generator and the
+    // standalone Registry on Windows.
+    if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+        return PathBuf::from(local_app_data)
+            .join("Raphael")
+            .join("ModelRegistry")
+            .join("data");
+    }
+
     ProjectDirs::from("com", "Raphael", "ModelRegistry")
-        .map(|projects| projects.data_dir().to_path_buf())
-        .unwrap_or_else(|| PathBuf::from(".raphael-model-registry"))
+        .map(|projects| projects.data_dir().join("data"))
+        .unwrap_or_else(|| PathBuf::from(".raphael-model-registry").join("data"))
 }
 
 fn locate_registry(app: &AppHandle) -> (Option<PathBuf>, Option<PathBuf>) {
