@@ -541,6 +541,60 @@ function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPromp
   </div>;
 }
 
+type GalleryPreview = { src: string; title: string; description: string };
+
+function GeneratedImageGallery({ story, images, onOpen, onReload }: {
+  story: Story;
+  images: Record<string, string>;
+  onOpen: (preview: GalleryPreview) => void;
+  onReload: (chapterNumber: number, sceneId: string) => void;
+}) {
+  const generatedScenes = story.chapters
+    .flatMap(chapter => chapter.scenes
+      .filter(scene => scene.image_status === 'generated')
+      .map(scene => ({ chapter, scene })))
+    .sort((a, b) => a.chapter.number - b.chapter.number || a.scene.order - b.scene.order);
+
+  return <section className="hud-panel generated-gallery">
+    <div className="panel-title-row generated-gallery-heading">
+      <div>
+        <div className="section-head">GENERATED IMAGE GALLERY</div>
+        <span className="tiny">CHAPTER ORDER · SCENE ORDER</span>
+      </div>
+      <span className="status-chip">{generatedScenes.length} IMAGE{generatedScenes.length === 1 ? '' : 'S'}</span>
+    </div>
+    {generatedScenes.length === 0
+      ? <div className="generated-gallery-empty">No generated images yet. Completed images will appear here in story order.</div>
+      : <div className="generated-gallery-grid">
+        {generatedScenes.map(({ chapter, scene }) => {
+          const src = images[scene.id];
+          const label = `CHAPTER ${String(chapter.number).padStart(2, '0')} · SCENE ${String(scene.order).padStart(2, '0')}`;
+          return <article className="generated-gallery-item" key={`${chapter.number}-${scene.id}`}>
+            <button
+              type="button"
+              className="generated-gallery-thumb"
+              onClick={() => src
+                ? onOpen({ src, title: label, description: scene.description })
+                : onReload(chapter.number, scene.id)}
+              aria-label={src ? `Open ${label}` : `Reload image for ${label}`}
+              title={src ? 'Open full-size image' : 'Try loading the saved image again'}
+            >
+              {src
+                ? <img src={src} alt={scene.description} loading="lazy" decoding="async" />
+                : <span className="generated-gallery-missing"><strong>IMAGE NOT LOADED</strong><small>Click to try loading again</small></span>}
+            </button>
+            <div className="generated-gallery-caption">
+              <div className="generated-gallery-order">{label}</div>
+              <strong>{scene.description}</strong>
+              <span>{scene.location || 'Unknown location'} · {scene.time || 'Time unspecified'}</span>
+              <small>{scene.image_width} × {scene.image_height}</small>
+            </div>
+          </article>;
+        })}
+      </div>}
+  </section>;
+}
+
 function formatTraceText(value: string, prettyJson: boolean = false): string {
   const normalized = value.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
 
@@ -770,6 +824,7 @@ export default function App() {
   const [pipelineTrace, setPipelineTrace] = useState<PipelineEvent[]>([]);
   const [comfyProgress, setComfyProgress] = useState<Record<string, ComfyGenerationEvent>>({});
   const [sceneImages, setSceneImages] = useState<Record<string, string>>({});
+  const [galleryPreview, setGalleryPreview] = useState<GalleryPreview | null>(null);
   const [selectedChapterNumber, setSelectedChapterNumber] = useState<number | null>(null);
   const [serviceStatus, setServiceStatus] = useState<ServiceStatusBoard>({
     registry: { service: 'registry', status: 'checking', url: 'http://127.0.0.1:43217', detail: 'Checking Registry API…' },
@@ -791,6 +846,7 @@ export default function App() {
       setDirective('');
       setPromptPreview(null);
       setSceneImages({});
+      setGalleryPreview(null);
       setComfyProgress({});
       const next = await api.getStory(id);
       setStory(next);
@@ -921,20 +977,26 @@ export default function App() {
 
 
   useEffect(() => {
-    if (!story || selectedChapterNumber == null) return;
-    const chapter = story.chapters.find(item => item.number === selectedChapterNumber);
-    if (!chapter) return;
+    if (!story) return;
     let disposed = false;
-    void Promise.all(chapter.scenes.filter(scene => scene.image_status === 'generated').map(async scene => {
+    const generatedScenes = story.chapters.flatMap(chapter =>
+      chapter.scenes
+        .filter(scene => scene.image_status === 'generated')
+        .map(scene => ({ chapter, scene }))
+    );
+
+    void Promise.all(generatedScenes.map(async ({ chapter, scene }) => {
       try {
         const image = await api.getSceneImage(story.id, chapter.number, scene.id);
-        if (!disposed && image) setSceneImages(current => ({ ...current, [scene.id]: image }));
+        if (!disposed && image) {
+          setSceneImages(current => current[scene.id] ? current : { ...current, [scene.id]: image });
+        }
       } catch {
-        // A deleted image should not prevent the chapter from loading.
+        // A missing or deleted image should not block the rest of the gallery.
       }
     }));
     return () => { disposed = true; };
-  }, [story?.id, selectedChapterNumber]);
+  }, [story?.id]);
 
   const refreshServiceStatus = async () => {
     if (serviceProbeActive.current) return;
@@ -1237,6 +1299,19 @@ export default function App() {
             <div className="story-header-tags"><TagRow values={story.metadata.tone} tone="tone"/></div>
           </section>
           <IntroductionView story={story}/>
+          <GeneratedImageGallery
+            story={story}
+            images={sceneImages}
+            onOpen={setGalleryPreview}
+            onReload={(chapterNumber, sceneId) => {
+              void api.getSceneImage(story.id, chapterNumber, sceneId)
+                .then(image => {
+                  if (image) setSceneImages(current => ({ ...current, [sceneId]: image }));
+                  else setError('The generated image file is missing from Raphael’s local image storage.');
+                })
+                .catch(loadError => setError(`Image reload failed: ${toErrorMessage(loadError)}`));
+            }}
+          />
           {currentChapter ? <ChapterView story={story} chapter={currentChapter} onExtractScenes={() => void extractScenes(currentChapter)} extracting={extracting} onBuildPrompt={scene => void buildPrompt(scene)} onViewPrompt={viewPrompt} onQueueImage={queueImage} onBuildAllPrompts={() => void buildAllPrompts(currentChapter)} onQueueAllImages={() => void generateAllImages(currentChapter)} buildingPrompt={buildingPrompt} queueing={queueing} bulkAction={bulkAction} bulkProgress={bulkProgress} operationDisabled={busy || extracting || Boolean(buildingPrompt) || Boolean(queueing) || bulkAction !== null} progress={comfyProgress} images={sceneImages}/> : null}
           <section className="hud-panel continuation-panel">
             <div className="section-head">CONTINUE THE STORY</div>
@@ -1270,6 +1345,16 @@ export default function App() {
       busy={busy}
       onClose={() => setVisualSetupOpen(false)}
     /> : null}
+    {galleryPreview ? <div className="overlay gallery-preview-overlay" onMouseDown={() => setGalleryPreview(null)}>
+      <section className="gallery-preview-dialog hud-panel" role="dialog" aria-modal="true" aria-label={galleryPreview.title} onMouseDown={e => e.stopPropagation()}>
+        <header className="settings-header">
+          <div><div className="eyebrow">GENERATED IMAGE</div><h2>{galleryPreview.title}</h2></div>
+          <button type="button" className="settings-close" aria-label="Close image preview" onClick={() => setGalleryPreview(null)}>×</button>
+        </header>
+        <div className="gallery-preview-image-wrap"><img src={galleryPreview.src} alt={galleryPreview.description} /></div>
+        <p className="gallery-preview-description">{galleryPreview.description}</p>
+      </section>
+    </div> : null}
     {promptPreview ? <div className="overlay" onMouseDown={() => setPromptPreview(null)}><section className="prompt-viewer hud-panel" onMouseDown={e => e.stopPropagation()}><header className="settings-header"><div><div className="eyebrow">IMAGE BUILDER</div><h2>SCENE {String(promptPreview.order).padStart(2, '0')} PROMPTS</h2></div><button className="settings-close" onClick={() => setPromptPreview(null)}>×</button></header><div className="prompt-viewer-body"><div><div className="section-head">IMAGE SIZE</div><div className="scene-image-size prompt-size">{promptPreview.image_width}×{promptPreview.image_height}</div><div className="section-head">POSITIVE PROMPT</div><pre className="prompt-box">{promptPreview.positive_prompt}</pre></div><div><div className="section-head">NEGATIVE PROMPT</div><pre className="prompt-box">{promptPreview.negative_prompt}</pre></div></div></section></div> : null}
     {settingsOpen ? <SettingsOverlay
       settings={state.settings}
