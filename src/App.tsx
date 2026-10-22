@@ -741,6 +741,12 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
 
       <div className="section-head setting-gap">COMFYUI</div>
       <label>API URL<input value={draft.comfyui_url} onChange={e => setDraft({ ...draft, comfyui_url: e.target.value })} placeholder="http://127.0.0.1:8188"/></label>
+      <div className="section-head setting-gap">FIXED IMAGE SIZE</div>
+      <div className="settings-grid-two">
+        <label>Width (px)<input type="number" min={512} max={4096} step={8} value={draft.image_width} onChange={e => setDraft({ ...draft, image_width: Number(e.target.value) || 1920 })}/></label>
+        <label>Height (px)<input type="number" min={512} max={4096} step={8} value={draft.image_height} onChange={e => setDraft({ ...draft, image_height: Number(e.target.value) || 1080 })}/></label>
+      </div>
+      <small className="settings-hint">Every scene uses the same configured dimensions, including existing scenes when you build prompts or queue images. Default: 1920 × 1080. Each value must be between 512 and 4096 and divisible by 8.</small>
       <label>API workflow template (optional)<small className="settings-hint">Leave blank to use Raphael Image Generator's built-in graph (UNETLoader or CheckpointLoaderSimple, Anima CLIP/VAE, model-only LoRA chain, EmptyLatentImage, KSampler and SaveImage). This built-in graph targets the same Anima setup as Image Generator. For a different model architecture, paste a ComfyUI API-format template with POSITIVE_PROMPT, NEGATIVE_PROMPT, SEED, STORY_ID, SCENE_ID, CHECKPOINT, and IMAGE_WIDTH/IMAGE_HEIGHT (or IMAGE_SIZE). A custom workflow must expose an image-size injection point and a CheckpointLoaderSimple or CheckpointLoader node; Raphael inserts LoRA loaders into that graph.</small><textarea className="workflow-input" value={draft.comfyui_workflow_json} onChange={e => setDraft({ ...draft, comfyui_workflow_json: e.target.value })} placeholder='Optional: paste a custom ComfyUI API workflow JSON template...'/></label>
     </div>
     {saveError ? <div className="settings-inline-error error-box">{saveError}</div> : null}
