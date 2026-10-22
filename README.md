@@ -141,7 +141,9 @@ Scene extraction and image prompt generation remain separate from story canon. I
 
 The image builder queues a scene through ComfyUI's `/prompt` API, then monitors the job through ComfyUI WebSocket events with an HTTP history fallback. Live sampling/node progress is shown directly on the scene card. When the workflow completes, Raphael downloads the first generated image output into app data and displays it in the scene.
 
-In Settings, paste a ComfyUI API-format workflow JSON template and use these placeholders inside string values:
+Leave **API workflow template** blank to use the built-in workflow mirrored from Raphael Image Generator. It builds the graph with `UNETLoader` for Registry model files under `models/unet` or `models/diffusion_models`, otherwise `CheckpointLoaderSimple`; uses the same Anima `CLIPLoader` and `VAELoader`; adds `LoraLoaderModelOnly` nodes in style-first, character-second order; and finishes with `EmptyLatentImage`, `KSampler`, `VAEDecode`, and `SaveImage`. Defaults are 28 steps, CFG 6.5, and Euler sampling. As with Raphael Image Generator, this built-in graph assumes the same Anima CLIP/VAE files exist in ComfyUI. For a different model architecture, set a custom workflow template instead.
+
+For a **custom workflow override**, paste a ComfyUI API-format workflow JSON template and use these placeholders inside string values:
 
 - `{{POSITIVE_PROMPT}}`
 - `{{NEGATIVE_PROMPT}}`
@@ -158,21 +160,11 @@ Use `"{{SEED}}"` as the complete value of a numeric seed field. Raphael converts
 
 ### Dynamic LoRA workflow builder
 
-The workflow template must contain a `CheckpointLoaderSimple` or `CheckpointLoader` node. After LoRA selection, Raphael calls a deterministic workflow-builder tool with an ordered `lora_stack[]`.
+For a custom workflow, the template must contain a `CheckpointLoaderSimple` or `CheckpointLoader` node. Raphael inserts one ComfyUI `LoraLoader` node per item and chains MODEL + CLIP through the stack. The built-in Image Generator graph instead uses `LoraLoaderModelOnly` nodes chained through MODEL only. Both modes build the LoRA chain deterministically with no fixed number of loader slots.
 
-The tool creates one ComfyUI `LoraLoader` node per selected LoRA and connects:
+The dynamic stack is ordered: locked style LoRAs first, then only the character LoRAs matched to canonical characters in the current scene.
 
-```
-Checkpoint
-   -> LoRA 1
-      -> LoRA 2
-         -> ...
-            -> LoRA N
-```
-
-Both MODEL and CLIP are chained through every LoRA. The final MODEL/CLIP outputs replace the original checkpoint MODEL/CLIP references in the workflow, so there is no fixed number of LoRA slots.
-
-The Story Generator supplies the stack in stable order: locked style LoRAs first, then scene-matched character LoRAs. Automatic selection is restricted to Registry entries tagged `character`, compatible with the selected checkpoint, and matched to a canonical scene character by Registry name, tags, or description. It does not automatically add generic style, concept, pose, setting, or background LoRAs. If no matching character LoRA exists, generation continues using the Story Bible's canonical appearance and clothing lock without a character LoRA. The selector chooses the LoRAs; the workflow builder only constructs the graph.
+The stack is ordered: locked style LoRAs first, then scene-matched character LoRAs. Automatic selection is restricted to Registry entries tagged `character`, compatible with the selected checkpoint, and matched to a canonical scene character by Registry name, tags, or description. The selector never automatically adds generic style, concept, pose, setting, or background LoRAs. If no matching character LoRA exists, generation continues using the Story Bible's canonical appearance and clothing lock without a character LoRA. The selector chooses the LoRAs; the workflow builder only constructs the graph.
 
 Automatic model discovery is handled through the shared Raphael Model Registry, the same metadata source used by Raphael Image Generator. When web research is enabled and the story prompt names an external character or series, the private research stage runs before Story Architect; per-scene character LoRA discovery runs when scene prompts are built.
 
