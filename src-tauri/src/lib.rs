@@ -1846,6 +1846,163 @@ fn checkpoint_uses_unet_loader(path: &str, relative_path: Option<&str>) -> bool 
         || relative_path.map(uses_unet_directory).unwrap_or(false)
 }
 
+fn normalized_comfy_model_name(name: &str) -> String {
+    name.replace('\\', "/")
+        .trim_start_matches("./")
+        .trim_matches('/')
+        .to_ascii_lowercase()
+}
+
+fn find_comfy_model_match(candidates: &[String], available: &[String]) -> Option<String> {
+    // Prefer an exact relative path match so identically named files in
+    // different model subfolders never get silently interchanged.
+    for candidate in candidates {
+        let normalized = normalized_comfy_model_name(candidate);
+        if normalized.is_empty() {
+            continue;
+        }
+        if let Some(found) = available
+            .iter()
+            .find(|name| normalized_comfy_model_name(name) == normalized)
+        {
+            return Some(found.clone());
+        }
+    }
+
+    // Registry paths are not always rooted at the ComfyUI models directory.
+    // A basename fallback is safe only when it is unique within this loader.
+    for candidate in candidates {
+        let normalized = normalized_comfy_model_name(candidate);
+        let basename = normalized.rsplit('/').next().unwrap_or_default();
+        if basename.is_empty() {
+            continue;
+        }
+        let matches = available
+            .iter()
+            .filter(|name| {
+                normalized_comfy_model_name(name)
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or_default()
+                    == basename
+            })
+            .collect::<Vec<_>>();
+        if matches.len() == 1 {
+            return Some(matches[0].to_string());
+        }
+    }
+    None
+}
+
+async fn fetch_comfy_model_choices(
+    client: &reqwest::Client,
+    base_url: &str,
+    node_type: &str,
+    input_name: &str,
+) -> AppResult<Vec<String>> {
+    let url = format!(
+        "{}/object_info/{}",
+        base_url.trim_end_matches('/'),
+        node_type
+    );
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| AppError::ComfyUi(format!(
+            "could not inspect ComfyUI's {node_type} model list: {error}"
+        )))?;
+    let status = response.status();
+    let body = response.text().await
+        .map_err(|error| AppError::ComfyUi(format!(
+            "could not read ComfyUI's {node_type} model list: {error}"
+        )))?;
+    if !status.is_success() {
+        return Err(AppError::ComfyUi(format!(
+            "ComfyUI returned HTTP {} while listing {node_type} models: {}",
+            status.as_u16(),
+            body.trim().chars().take(500).collect::<String>()
+        )));
+    }
+
+    let value: Value = serde_json::from_str(&body)
+        .map_err(|error| AppError::ComfyUi(format!(
+            "ComfyUI returned invalid {node_type} metadata: {error}"
+        )))?;
+    let node_info = value.get(node_type)
+        .or_else(|| value.as_object().and_then(|nodes| {
+            (nodes.len() == 1).then(|| nodes.values().next()).flatten()
+        }))
+        .ok_or_else(|| AppError::ComfyUi(format!(
+            "ComfyUI's /object_info response did not contain {node_type}"
+        )))?;
+    let choices = node_info
+        .get("input")
+        .and_then(|input| input.get("required"))
+        .and_then(|required| required.get(input_name))
+        .and_then(Value::as_array)
+        .and_then(|definition| definition.first())
+        .and_then(Value::as_array)
+        .ok_or_else(|| AppError::ComfyUi(format!(
+            "ComfyUI did not expose the {input_name} choices for {node_type}"
+        )))?;
+
+    Ok(choices.iter().filter_map(Value::as_str).map(str::to_string).collect())
+}
+
+async fn resolve_comfyui_checkpoint(
+    client: &reqwest::Client,
+    base_url: &str,
+    file_path: &str,
+    relative_path: Option<&str>,
+    file_name: &str,
+) -> AppResult<(bool, String)> {
+    let checkpoint_choices = fetch_comfy_model_choices(
+        client, base_url, "CheckpointLoaderSimple", "ckpt_name"
+    ).await?;
+    let unet_choices = fetch_comfy_model_choices(
+        client, base_url, "UNETLoader", "unet_name"
+    ).await?;
+
+    let preferred_unet = checkpoint_uses_unet_loader(file_path, relative_path);
+    let (preferred_choices, alternate_choices) = if preferred_unet {
+        (&unet_choices, &checkpoint_choices)
+    } else {
+        (&checkpoint_choices, &unet_choices)
+    };
+    let (preferred_folder, alternate_folder) = if preferred_unet {
+        ("unet", "checkpoints")
+    } else {
+        ("checkpoints", "unet")
+    };
+
+    let mut candidates = vec![
+        comfy_relative_model_name(file_path, relative_path, preferred_folder, file_name),
+        comfy_relative_model_name("", relative_path, preferred_folder, file_name),
+        comfy_relative_model_name(file_path, relative_path, alternate_folder, file_name),
+        comfy_relative_model_name("", relative_path, alternate_folder, file_name),
+        file_name.to_string(),
+    ];
+    candidates.retain(|candidate| !candidate.trim().is_empty());
+    candidates.dedup_by(|left, right| {
+        normalized_comfy_model_name(left) == normalized_comfy_model_name(right)
+    });
+
+    if let Some(name) = find_comfy_model_match(&candidates, preferred_choices) {
+        return Ok((preferred_unet, name));
+    }
+    if let Some(name) = find_comfy_model_match(&candidates, alternate_choices) {
+        return Ok((!preferred_unet, name));
+    }
+
+    let requested = candidates.first().map(String::as_str).unwrap_or(file_name);
+    Err(AppError::ComfyUi(format!(
+        "the selected model '{requested}' is not in ComfyUI's available checkpoint or diffusion-model lists ({} checkpoint(s), {} diffusion model(s)). Put the model file under ComfyUI/models/checkpoints or ComfyUI/models/diffusion_models, then refresh/restart ComfyUI or select a model that appears in its list. Registry paths alone do not make a model available to ComfyUI.",
+        checkpoint_choices.len(),
+        unet_choices.len()
+    )))
+}
+
 fn replace_workflow_placeholders(value: &mut Value, replacements: &[(&str, Value)]) {
     match value {
         Value::String(text) => {
@@ -2976,20 +3133,42 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
     }
 
     let (image_width, image_height) = validate_image_size(settings.image_width, settings.image_height)?;
+    let comfyui_url = settings.comfyui_url.trim();
+    if !(comfyui_url.starts_with("http://") || comfyui_url.starts_with("https://")) {
+        return Err(AppError::ComfyUi("ComfyUI URL must start with http:// or https://".into()));
+    }
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|error| AppError::ComfyUi(format!("failed to create HTTP client: {error}")))?;
     let positive_prompt = scene.positive_prompt.clone();
     let negative_prompt = scene.negative_prompt.clone();
     let seed = (Uuid::new_v4().as_u128() & u64::MAX as u128) as u64;
 
-    let use_unet_loader = checkpoint_uses_unet_loader(
-        &story.visual_config.checkpoint_file_path,
-        story.visual_config.checkpoint_relative_path.as_deref(),
-    );
-    let checkpoint_name = comfy_relative_model_name(
-        &story.visual_config.checkpoint_file_path,
-        story.visual_config.checkpoint_relative_path.as_deref(),
-        if use_unet_loader { "unet" } else { "checkpoints" },
-        &story.visual_config.checkpoint_file_name,
-    );
+    // Resolve the selected Registry file against ComfyUI's live loader lists.
+    // This prevents submitting a stale/invalid filename or the wrong loader.
+    let (use_unet_loader, checkpoint_name) = if settings.comfyui_workflow_json.trim().is_empty() {
+        resolve_comfyui_checkpoint(
+            &client,
+            comfyui_url,
+            &story.visual_config.checkpoint_file_path,
+            story.visual_config.checkpoint_relative_path.as_deref(),
+            &story.visual_config.checkpoint_file_name,
+        ).await?
+    } else {
+        let use_unet_loader = checkpoint_uses_unet_loader(
+            &story.visual_config.checkpoint_file_path,
+            story.visual_config.checkpoint_relative_path.as_deref(),
+        );
+        let name = comfy_relative_model_name(
+            &story.visual_config.checkpoint_file_path,
+            story.visual_config.checkpoint_relative_path.as_deref(),
+            if use_unet_loader { "unet" } else { "checkpoints" },
+            &story.visual_config.checkpoint_file_name,
+        );
+        (use_unet_loader, name)
+    };
 
     // Image Generator-compatible model order: locked style first, then the
     // character-matched LoRAs selected for this scene. No generic dynamic LoRAs.
@@ -3070,16 +3249,7 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
         "completed",
         format!("Created {} LoRA loader node(s){}", built.lora_node_ids.len(), if custom_workflow { " in the configured workflow" } else { " in the built-in Image Generator workflow" }),
     );
-    let comfyui_url = settings.comfyui_url.trim();
-    if !(comfyui_url.starts_with("http://") || comfyui_url.starts_with("https://")) {
-        return Err(AppError::ComfyUi("ComfyUI URL must start with http:// or https://".into()));
-    }
     let url = format!("{}/prompt", comfyui_url.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(5))
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| AppError::ComfyUi(format!("failed to create HTTP client: {e}")))?;
     emit_pipeline(store.app(), "comfyui", "started", "Submitting completed workflow to ComfyUI /prompt");
     let client_id = format!("raphael-story-{}-{}", story.id, Uuid::new_v4());
     let requested_prompt_id = Uuid::new_v4().to_string();
@@ -3654,6 +3824,42 @@ mod tests {
             ),
             r"anima\model.safetensors"
         );
+    }
+
+    #[test]
+    fn comfy_model_matching_prefers_exact_relative_paths() {
+        let available = vec![
+            "anima/model.safetensors".to_string(),
+            "other/model.safetensors".to_string(),
+        ];
+        let candidates = vec![
+            r"other\\model.safetensors".to_string(),
+            "model.safetensors".to_string(),
+        ];
+        assert_eq!(
+            find_comfy_model_match(&candidates, &available).as_deref(),
+            Some("other/model.safetensors")
+        );
+    }
+
+    #[test]
+    fn comfy_model_matching_uses_unique_basename_when_registry_root_differs() {
+        let available = vec!["nested/anima/model.safetensors".to_string()];
+        let candidates = vec![r"C:\\Registry\\artifacts\\model.safetensors".to_string()];
+        assert_eq!(
+            find_comfy_model_match(&candidates, &available).as_deref(),
+            Some("nested/anima/model.safetensors")
+        );
+    }
+
+    #[test]
+    fn comfy_model_matching_refuses_ambiguous_basename() {
+        let available = vec![
+            "first/model.safetensors".to_string(),
+            "second/model.safetensors".to_string(),
+        ];
+        let candidates = vec!["model.safetensors".to_string()];
+        assert_eq!(find_comfy_model_match(&candidates, &available), None);
     }
 
     #[test]
