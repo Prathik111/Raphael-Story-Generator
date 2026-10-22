@@ -53,6 +53,8 @@ export interface VisualStyleLora {
   name: string;
   weight: number;
   file_name: string;
+  file_path?: string;
+  relative_path?: string | null;
   version_id: string | null;
   file_id: string | null;
   sha256: string | null;
@@ -63,6 +65,8 @@ export interface StoryVisualConfig {
   checkpoint_id: string;
   checkpoint_name: string;
   checkpoint_file_name: string;
+  checkpoint_file_path?: string;
+  checkpoint_relative_path?: string | null;
   checkpoint_version_id: string | null;
   checkpoint_file_id: string | null;
   checkpoint_sha256: string | null;
@@ -76,6 +80,8 @@ export interface SceneLoraSelection {
   character: string | null;
   weight: number;
   file_name: string;
+  file_path?: string;
+  relative_path?: string | null;
   version_id: string | null;
   file_id: string | null;
   sha256: string | null;
