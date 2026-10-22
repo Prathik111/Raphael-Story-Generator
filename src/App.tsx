@@ -740,7 +740,8 @@ function ResearchActivityPanel({ pipeline, generations }: {
   );
   const latest = events.slice(-16);
   const liveTrace = generations.slice().reverse().find(trace => trace.stage === 'web_research');
-  const activeEvent = latest.slice().reverse().find(event => event.status === 'started');
+  const latestResearchEvent = latest[latest.length - 1] || null;
+  const activeEvent = latestResearchEvent?.status === 'started' ? latestResearchEvent : null;
   const query = liveTrace?.user_prompt.match(/RESEARCH QUERY:\s*([^\r\n]+)/i)?.[1]?.trim();
 
   return <section className="hud-panel inspector-panel live-research-activity" aria-live="polite">
