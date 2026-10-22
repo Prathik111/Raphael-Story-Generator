@@ -164,8 +164,10 @@ pub fn build_raphael_workflow(request: RaphaelWorkflowRequest) -> AppResult<Work
 }
 
 fn validate_image_dimension(value: u32, label: &str) -> AppResult<()> {
-    if !(512..=2048).contains(&value) || value % 64 != 0 {
-        return Err(AppError::ComfyUi(format!("image {label} must be between 512 and 2048 and divisible by 64; received {value}")));
+    if !(512..=4096).contains(&value) || value % 8 != 0 {
+        return Err(AppError::ComfyUi(format!(
+            "image {label} must be between 512 and 4096 and divisible by 8; received {value}"
+        )));
     }
     Ok(())
 }
@@ -494,6 +496,29 @@ mod tests {
         assert_eq!(workflow["4"]["inputs"]["model"], json!(["8", 0]));
         assert_eq!(workflow["5"]["inputs"]["width"], json!(1024));
         assert_eq!(workflow["5"]["inputs"]["height"], json!(1024));
+    }
+
+    #[test]
+    fn accepts_1920_by_1080_image_size() {
+        let result = build_raphael_workflow(RaphaelWorkflowRequest {
+            checkpoint_name: "checkpoint.safetensors".into(),
+            use_unet_loader: false,
+            positive_prompt: "positive".into(),
+            negative_prompt: "negative".into(),
+            seed: 1,
+            image_width: 1920,
+            image_height: 1080,
+            lora_stack: Vec::new(),
+        }).unwrap();
+        assert_eq!(result.workflow["8"]["inputs"]["width"], json!(1920));
+        assert_eq!(result.workflow["8"]["inputs"]["height"], json!(1080));
+    }
+
+    #[test]
+    fn accepts_eight_aligned_dimensions_even_if_not_64_aligned() {
+        validate_image_dimension(864, "width").unwrap();
+        validate_image_dimension(1536, "height").unwrap();
+        assert!(validate_image_dimension(863, "width").is_err());
     }
 
     #[test]
