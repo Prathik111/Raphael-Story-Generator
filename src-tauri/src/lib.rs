@@ -1775,11 +1775,77 @@ JSON shape:
 {}
 
 Use the web-research facts only when they are supported by the cited sources. Do not invent external facts that are absent from the supplied research.
+Every empty string in the example JSON is a placeholder, not a value to copy. Populate required string fields with meaningful content. In particular, introduction must be a non-empty, engaging 2–4 sentence introduction that sets up the story before Chapter 1. Chapter title, summary, and text must also be non-empty.
 Return the JSON shape above.", prompt.trim(), research_context, schema_hint);
     emit_pipeline(store.app(), "story_architect", "started", "Generating story bible and opening chapter");
     let raw = chat(store.app(), &settings, "story_architect", system, &architect_prompt).await?;
-    let parsed: InitialResponse = parse_story_architect_response(&raw)
+    let mut parsed: InitialResponse = parse_story_architect_response(&raw)
         .map_err(|e| AppError::ModelResponse(format!("{}; raw model output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
+
+    // Smaller local models may copy the empty introduction placeholder from the schema.
+    // Repair only that field instead of throwing away the otherwise valid Story Bible.
+    if parsed.introduction.trim().is_empty() {
+        emit_pipeline(
+            store.app(),
+            "story_introduction_repair",
+            "started",
+            "Story Architect returned an empty introduction; generating the missing field",
+        );
+        let character_names = parsed.characters.iter()
+            .map(|character| character.name.trim())
+            .filter(|name| !name.is_empty())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let chapter_excerpt = parsed.chapter.text.chars().take(3000).collect::<String>();
+        let repair_system = "You are Raphael Story Introduction Repairer. Write a concise, engaging introduction for an existing story. Return only valid JSON with one non-empty string field named introduction. Do not return an empty string, a chapter, or commentary.";
+        let repair_prompt = format!(
+            "Write a 2–4 sentence introduction that appears before Chapter 1. Set up the premise and central conflict, preserve canon, and do not simply repeat the chapter text.\n\nUSER STORY REQUEST:\n{}\n\nTITLE:\n{}\n\nPREMISE:\n{}\n\nCENTRAL CONFLICT:\n{}\n\nWORLD SETTING:\n{}\n\nCHARACTERS:\n{}\n\nCHAPTER 1 TITLE:\n{}\n\nCHAPTER 1 SUMMARY:\n{}\n\nCHAPTER 1 OPENING FOR CONTEXT:\n{}\n\nReturn exactly this JSON shape with meaningful content: {{\"introduction\":\"Your introduction here\"}}",
+            prompt.trim(),
+            parsed.title,
+            parsed.premise,
+            parsed.central_conflict,
+            parsed.world_setting,
+            if character_names.is_empty() { "(not specified)" } else { &character_names },
+            parsed.chapter.title,
+            parsed.chapter.summary,
+            chapter_excerpt,
+        );
+        let repaired_raw = chat(
+            store.app(),
+            &settings,
+            "story_introduction_repair",
+            repair_system,
+            &repair_prompt,
+        ).await?;
+        let repaired_value: Value = serde_json::from_str(clean_json(&repaired_raw))
+            .map_err(|error| AppError::ModelResponse(format!(
+                "story introduction repair returned invalid JSON: {}; raw output starts with: {}",
+                error,
+                &repaired_raw.chars().take(200).collect::<String>()
+            )))?;
+        let repaired_introduction = repaired_value.get("introduction")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        if repaired_introduction.is_empty() {
+            emit_pipeline(
+                store.app(),
+                "story_introduction_repair",
+                "error",
+                "The repair response did not contain a non-empty introduction",
+            );
+            return Err(AppError::ModelResponse(
+                "generated story introduction was empty; automatic repair returned no non-empty introduction".into()
+            ));
+        }
+        parsed.introduction = repaired_introduction.to_string();
+        emit_pipeline(
+            store.app(),
+            "story_introduction_repair",
+            "completed",
+            "Filled the missing story introduction without regenerating the Story Bible",
+        );
+    }
     validate_initial_response(&parsed)?;
     let story_id = Uuid::new_v4().to_string();
     let mut characters = Vec::with_capacity(parsed.characters.len());
