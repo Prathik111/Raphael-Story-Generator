@@ -614,3 +614,20 @@ html{scrollbar-color:rgba(168,216,240,.28) rgba(0,0,0,.18);scrollbar-width:thin}
   z-index: 2;
   background: transparent !important;
 }
+
+
+/* Scene prompt consistency and chapter-wide generation controls */
+.scenes-panel-heading{align-items:flex-start}
+.scene-bulk-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}
+.scene-bulk-actions .secondary-btn,.scene-bulk-actions .primary-btn{min-height:25px;padding:5px 8px;font-size:6px;letter-spacing:.08em;white-space:nowrap}
+.bulk-progress-note{margin-top:9px;padding:7px 9px;border-left:2px solid rgba(168,216,240,.55);background:rgba(168,216,240,.035);font-size:6px;letter-spacing:.12em;color:rgba(211,237,247,.6)}
+.scene-character-details{margin:10px 0;padding:9px;border:1px solid rgba(168,216,240,.12);background:rgba(168,216,240,.025)}
+.scene-character-details .section-head{margin:0 0 7px;color:rgba(168,216,240,.55)}
+.scene-character-details p{margin:7px 0 0;font-size:7px;line-height:1.55;color:rgba(229,243,248,.48);overflow-wrap:anywhere}
+.scene-character-details p strong{display:block;margin-bottom:3px;font-size:7px;font-weight:600;color:rgba(229,243,248,.75)}
+.scene-character-details p span{display:block;margin-top:2px}
+.scene-character-details.missing{font-size:7px;line-height:1.5;color:rgba(248,204,204,.66)}
+.scene-card .scene-actions{flex-wrap:wrap;justify-content:flex-end}
+.scene-card .scene-footer{align-items:flex-start}
+@media(max-width:1200px){.scenes-panel-heading{flex-direction:column}.scene-bulk-actions{justify-content:flex-start;width:100%}}
+@media(max-width:780px){.scene-bulk-actions .status-chip{margin-right:auto}.scene-bulk-actions .secondary-btn,.scene-bulk-actions .primary-btn{flex:1 1 auto}.scene-character-details{padding:8px}}
