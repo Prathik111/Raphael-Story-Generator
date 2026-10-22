@@ -37,7 +37,8 @@ pub struct ComfyGenerationEvent {
 }
 
 fn emit_progress(app: &AppHandle, event: ComfyGenerationEvent) {
-    let _ = app.emit("raphael:comfyui", event);
+    let _ = app.emit("raphael:comfyui", event.clone());
+    crate::publish_lan_event(app, "raphael:comfyui", &event);
 }
 
 fn emit(app: &AppHandle, story_id: &str, chapter_number: usize, scene_id: &str, prompt_id: &str, status: &str, progress: Option<f32>, node: Option<String>, step: Option<u64>, total: Option<u64>, queue_remaining: Option<u64>, image_url: Option<String>, error: Option<String>, message: impl Into<String>) {
