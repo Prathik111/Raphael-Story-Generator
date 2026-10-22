@@ -6,16 +6,34 @@ mod ollama_host;
 mod service_status;
 mod workflow_builder;
 
+use axum::{
+    body::Body,
+    extract::{DefaultBodyLimit, Path as AxumPath, State as AxumState},
+    http::{header::CONTENT_TYPE, Uri, StatusCode},
+    response::{sse::{Event, KeepAlive, Sse}, IntoResponse, Response},
+    routing::{get, post},
+    Json as AxumJson, Router,
+};
 use base64::Engine;
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::AUTHORIZATION;
 use research::ResearchBundle;
-use serde::{Deserialize, Serialize};
-use futures_util::StreamExt;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use futures_util::{stream, StreamExt};
 use serde_json::{json, Value};
-use std::{collections::HashMap, env, fs, path::PathBuf, sync::RwLock};
+use std::{
+    collections::HashMap,
+    convert::Infallible,
+    env,
+    fs,
+    net::{Ipv4Addr, SocketAddr, UdpSocket},
+    path::{Component, PathBuf},
+    sync::{Mutex as StdMutex, RwLock},
+    time::Duration,
+};
 use keyring::Entry;
 use tauri::{AppHandle, Emitter, Manager, State};
 use thiserror::Error;
+use tokio::{net::TcpListener, sync::{broadcast, oneshot}, task::JoinHandle};
 use uuid::Uuid;
 
 #[derive(Debug, Error)]
@@ -940,16 +958,19 @@ struct PipelineEvent {
 }
 
 fn emit_llm(app: &AppHandle, event: LlmGenerationEvent) {
-    let _ = app.emit("raphael:llm", event);
+    let _ = app.emit("raphael:llm", event.clone());
+    publish_lan_event(app, "raphael:llm", &event);
 }
 
 fn emit_pipeline(app: &AppHandle, stage: &str, status: &str, message: impl Into<String>) {
-    let _ = app.emit("raphael:pipeline", PipelineEvent {
+    let event = PipelineEvent {
         event_id: Uuid::new_v4().to_string(),
         stage: stage.to_string(),
         status: status.to_string(),
         message: message.into(),
-    });
+    };
+    let _ = app.emit("raphael:pipeline", event.clone());
+    publish_lan_event(app, "raphael:pipeline", &event);
 }
 fn emit_llm_error(app: &AppHandle, generation_id: &str, stage: &str, model: &str, response: Option<String>, message: String) {
     emit_llm(app, LlmGenerationEvent {
@@ -3486,12 +3507,300 @@ fn get_ollama_lan_host_status(
     ollama_host::status(&host, port)
 }
 
+
+#[derive(Debug, Clone, Serialize)]
+struct WebHostStatus {
+    running: bool,
+    port: u16,
+    lan_url: Option<String>,
+    detail: Option<String>,
+}
+
+impl WebHostStatus {
+    fn stopped() -> Self {
+        Self {
+            running: false,
+            port: 1425,
+            lan_url: None,
+            detail: Some("Raphael LAN web host is stopped.".into()),
+        }
+    }
+}
+
+struct ActiveWebHost {
+    status: WebHostStatus,
+    shutdown: oneshot::Sender<()>,
+    task: JoinHandle<()>,
+}
+
+pub(crate) struct LanWebHost {
+    running: StdMutex<Option<ActiveWebHost>>,
+    events: broadcast::Sender<Value>,
+}
+
+impl Default for LanWebHost {
+    fn default() -> Self {
+        let (events, _) = broadcast::channel(512);
+        Self { running: StdMutex::new(None), events }
+    }
+}
+
+#[derive(Clone)]
+struct LanWebApiState {
+    app: AppHandle,
+    events: broadcast::Sender<Value>,
+    dist: PathBuf,
+}
+
+pub(crate) fn publish_lan_event<T: Serialize>(app: &AppHandle, name: &str, payload: &T) {
+    let Ok(payload) = serde_json::to_value(payload) else { return; };
+    if let Some(host) = app.try_state::<LanWebHost>() {
+        let _ = host.events.send(json!({ "name": name, "payload": payload }));
+    }
+}
+
+fn web_value<T: Serialize, E: ToString>(result: Result<T, E>) -> Result<Value, String> {
+    let value = result.map_err(|error| error.to_string())?;
+    serde_json::to_value(value).map_err(|error| error.to_string())
+}
+
+fn web_arg<T: DeserializeOwned>(body: &Value, name: &str) -> Result<T, String> {
+    let value = body.get(name).cloned()
+        .ok_or_else(|| format!("Missing API parameter '{name}'"))?;
+    serde_json::from_value(value)
+        .map_err(|error| format!("Invalid API parameter '{name}': {error}"))
+}
+
+fn detect_lan_ipv4() -> Result<Ipv4Addr, String> {
+    // Select the private LAN interface and bind only to that address, not 0.0.0.0.
+    for target in ["192.168.1.1:80", "10.0.0.1:80", "172.16.0.1:80", "8.8.8.8:80"] {
+        let Ok(socket) = UdpSocket::bind("0.0.0.0:0") else { continue; };
+        if socket.connect(target).is_err() { continue; }
+        let Ok(SocketAddr::V4(address)) = socket.local_addr() else { continue; };
+        if address.ip().is_private() && !address.ip().is_loopback() {
+            return Ok(*address.ip());
+        }
+    }
+    Err("Could not detect a private LAN IPv4 address. Connect this PC to Wi-Fi or Ethernet and retry.".into())
+}
+
+fn web_dist_directory(app: &AppHandle) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(resource) = app.path().resource_dir() {
+        candidates.push(resource.join("dist"));
+        candidates.push(resource);
+    }
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../dist"));
+    candidates.into_iter().find(|path| path.join("index.html").is_file())
+}
+
+#[tauri::command]
+async fn start_web_host(app: AppHandle, host: State<'_, LanWebHost>) -> Result<WebHostStatus, String> {
+    {
+        let running = host.running.lock().map_err(|_| "LAN web-host state lock is poisoned".to_string())?;
+        if let Some(active) = running.as_ref() {
+            return Ok(active.status.clone());
+        }
+    }
+
+    let dist = web_dist_directory(&app)
+        .ok_or_else(|| "Could not find the built Raphael web app (dist/index.html). Build Raphael first, then restart the LAN host.".to_string())?;
+    let ip = detect_lan_ipv4()?;
+    let port = 1425;
+    let address = SocketAddr::from((ip, port));
+    let listener = TcpListener::bind(address).await
+        .map_err(|error| format!("Could not start Raphael LAN hosting on {address}: {error}. Close the application using this port and retry."))?;
+
+    let api_state = LanWebApiState { app: app.clone(), events: host.events.clone(), dist };
+    let router = Router::new()
+        .route("/health", get(|| async { AxumJson(json!({ "ok": true, "service": "raphael-story-generator" })) }))
+        .route("/api/events", get(lan_web_events))
+        .route("/api/{command}", post(lan_web_command))
+        .fallback(lan_web_asset)
+        .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
+        .with_state(api_state);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        if let Err(error) = axum::serve(listener, router)
+            .with_graceful_shutdown(async { let _ = shutdown_rx.await; })
+            .await
+        {
+            eprintln!("Raphael LAN web host stopped: {error}");
+        }
+    });
+    let lan_url = format!("http://{ip}:{port}");
+    let status = WebHostStatus {
+        running: true,
+        port,
+        lan_url: Some(lan_url.clone()),
+        detail: Some(format!("Raphael is hosted on the private LAN at {lan_url}.")),
+    };
+
+    let mut running = host.running.lock().map_err(|_| "LAN web-host state lock is poisoned".to_string())?;
+    if running.is_some() {
+        let _ = shutdown_tx.send(());
+        task.abort();
+        return Err("Raphael LAN hosting was started concurrently. Retry the request.".into());
+    }
+    *running = Some(ActiveWebHost { status: status.clone(), shutdown: shutdown_tx, task });
+    Ok(status)
+}
+
+#[tauri::command]
+fn stop_web_host(host: State<'_, LanWebHost>) -> Result<WebHostStatus, String> {
+    let mut running = host.running.lock().map_err(|_| "LAN web-host state lock is poisoned".to_string())?;
+    if let Some(active) = running.take() {
+        let _ = active.shutdown.send(());
+        active.task.abort();
+    }
+    Ok(WebHostStatus::stopped())
+}
+
+#[tauri::command]
+fn get_web_host_status(host: State<'_, LanWebHost>) -> Result<WebHostStatus, String> {
+    let running = host.running.lock().map_err(|_| "LAN web-host state lock is poisoned".to_string())?;
+    Ok(running.as_ref().map(|active| active.status.clone()).unwrap_or_else(WebHostStatus::stopped))
+}
+
+async fn lan_web_events(
+    AxumState(state): AxumState<LanWebApiState>,
+) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    let receiver = state.events.subscribe();
+    let event_stream = stream::unfold(receiver, |mut receiver| async move {
+        loop {
+            match receiver.recv().await {
+                Ok(value) => return Some((Ok::<Event, Infallible>(Event::default().data(value.to_string())), receiver)),
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    });
+    Sse::new(event_stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+}
+
+async fn lan_web_command(
+    AxumState(state): AxumState<LanWebApiState>,
+    AxumPath(command): AxumPath<String>,
+    AxumJson(body): AxumJson<Value>,
+) -> Response {
+    let app = state.app.clone();
+    let result: Result<Value, String> = async {
+        match command.as_str() {
+            "get_app_state" => web_value(get_app_state(app.state::<Store>())),
+            "get_story" => {
+                let id = web_arg(&body, "id")?;
+                web_value(get_story(id, app.state::<Store>()))
+            }
+            "get_settings" => web_value(get_settings(app.state::<Store>())),
+            "save_settings" => {
+                let settings = web_arg(&body, "settings")?;
+                web_value(save_settings(settings, app.state::<Store>()))
+            }
+            "clear_llm_api_key" => web_value(clear_llm_api_key(app.state::<Store>())),
+            "create_story" => {
+                let prompt = web_arg(&body, "prompt")?;
+                let visual_setup = web_arg(&body, "visualSetup")?;
+                web_value(create_story(prompt, visual_setup, app.state::<Store>(), app.state::<registry::RegistryState>()).await)
+            }
+            "generate_next_chapter" => {
+                let story_id = web_arg(&body, "storyId")?;
+                let user_prompt = web_arg(&body, "userPrompt")?;
+                web_value(generate_next_chapter(story_id, user_prompt, app.state::<Store>()).await)
+            }
+            "extract_scenes" => {
+                let story_id = web_arg(&body, "storyId")?;
+                let chapter_number = web_arg(&body, "chapterNumber")?;
+                web_value(extract_scenes(story_id, chapter_number, app.state::<Store>()).await)
+            }
+            "build_scene_prompt" => {
+                let story_id = web_arg(&body, "storyId")?;
+                let chapter_number = web_arg(&body, "chapterNumber")?;
+                let scene_id = web_arg(&body, "sceneId")?;
+                web_value(build_scene_prompt(story_id, chapter_number, scene_id, app.state::<Store>(), app.state::<registry::RegistryState>()).await)
+            }
+            "queue_scene_image" => {
+                let story_id = web_arg(&body, "storyId")?;
+                let chapter_number = web_arg(&body, "chapterNumber")?;
+                let scene_id = web_arg(&body, "sceneId")?;
+                web_value(queue_scene_image(story_id, chapter_number, scene_id, app.state::<Store>()).await)
+            }
+            "get_scene_image" => {
+                let story_id = web_arg(&body, "storyId")?;
+                let chapter_number = web_arg(&body, "chapterNumber")?;
+                let scene_id = web_arg(&body, "sceneId")?;
+                web_value(get_scene_image(story_id, chapter_number, scene_id, app.state::<Store>()))
+            }
+            "build_comfyui_workflow" => {
+                let workflow = web_arg(&body, "workflow")?;
+                let lora_stack = web_arg(&body, "loraStack")?;
+                let checkpoint_node = web_arg(&body, "checkpointNode")?;
+                let image_width = web_arg(&body, "imageWidth")?;
+                let image_height = web_arg(&body, "imageHeight")?;
+                web_value(build_comfyui_workflow(workflow, lora_stack, checkpoint_node, image_width, image_height))
+            }
+            "test_private_web_research" => web_value(test_private_web_research(app.state::<Store>()).await),
+            "get_service_status" => web_value(get_service_status(app.state::<Store>(), app.state::<registry::RegistryState>()).await),
+            "get_registry_model_thumbnails" => {
+                let model_ids = web_arg(&body, "modelIds")?;
+                web_value(get_registry_model_thumbnails(model_ids, app.state::<registry::RegistryState>()).await)
+            }
+            "detect_ollama_models" => {
+                let configured_base_url = web_arg(&body, "configuredBaseUrl")?;
+                web_value(detect_ollama_models(configured_base_url, app.state::<Store>()).await)
+            }
+            "ensure_registry" => web_value(registry::ensure_registry(app.state::<registry::RegistryState>()).await),
+            "get_registry_status" => web_value(registry::get_registry_status(app.state::<registry::RegistryState>()).await),
+            "get_registry_models" => web_value(registry::get_registry_models(app.state::<registry::RegistryState>()).await),
+            _ => Err(format!("Unknown Raphael API command: {command}")),
+        }
+    }.await;
+
+    match result {
+        Ok(value) => AxumJson(value).into_response(),
+        Err(message) => (StatusCode::INTERNAL_SERVER_ERROR, AxumJson(json!({ "error": message }))).into_response(),
+    }
+}
+
+async fn lan_web_asset(
+    AxumState(state): AxumState<LanWebApiState>,
+    uri: Uri,
+) -> Response {
+    let requested = uri.path().trim_start_matches('/');
+    let requested = if requested.is_empty() { "index.html" } else { requested };
+    let relative = PathBuf::from(requested);
+    if relative.components().any(|part| !matches!(part, Component::Normal(_))) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let candidate = state.dist.join(relative);
+    let path = if candidate.is_file() { candidate } else { state.dist.join("index.html") };
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let content_type = match path.extension().and_then(|extension| extension.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+        "html" => "text/html; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" | "map" => "application/json",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        _ => "application/octet-stream",
+    };
+    (StatusCode::OK, [(CONTENT_TYPE, content_type)], bytes).into_response()
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let registry = registry::RegistryState::new(app.handle());
             app.manage(registry);
-            app.manage(ollama_host::OllamaLanHost::default());
+            app.manage(LanWebHost::default());
             let store = Store::new(app.handle()).map_err(|e| {
                 std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
             })?;
@@ -3540,7 +3849,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_app_state, get_story, get_settings, save_settings, clear_llm_api_key, create_story, generate_next_chapter, extract_scenes, build_scene_prompt, queue_scene_image, get_scene_image, build_comfyui_workflow, test_private_web_research, get_service_status, get_registry_model_thumbnails, detect_ollama_models, start_ollama_lan_host, stop_ollama_lan_host, get_ollama_lan_host_status, registry::ensure_registry, registry::get_registry_status, registry::get_registry_models])
+        .invoke_handler(tauri::generate_handler![get_app_state, get_story, get_settings, save_settings, clear_llm_api_key, create_story, generate_next_chapter, extract_scenes, build_scene_prompt, queue_scene_image, get_scene_image, build_comfyui_workflow, test_private_web_research, get_service_status, get_registry_model_thumbnails, detect_ollama_models, start_web_host, stop_web_host, get_web_host_status, registry::ensure_registry, registry::get_registry_status, registry::get_registry_models])
         .run(tauri::generate_context!())
         .expect("error while running Raphael Story Generator");
 }
