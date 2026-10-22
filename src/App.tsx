@@ -838,7 +838,7 @@ function LanWebHostControl() {
       <div className="eyebrow">RAPHAEL LAN ADDRESS</div>
       <code>{host.lan_url}</code>
       <button type="button" className="mini-btn" onClick={() => void copyAddress()}>{copied ? 'COPIED' : 'COPY ADDRESS'}</button>
-      <small>Open this address on another device connected to the same trusted LAN.</small>
+      <small>Open this address on another device connected to the same trusted LAN. No Ollama API port is exposed separately.</small>
     </div> : null}
     {error ? <div className="lan-web-host-error" role="alert">{error}</div> : null}
   </div>;
@@ -918,7 +918,7 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
         {ollamaModels.length ? <span className="tiny">{ollamaModels.length} MODEL(S)</span> : null}
       </div>
       {ollamaModels.length ? <label>Detected model<select value={draft.llm_model} onChange={e => setDraft({ ...draft, llm_model: e.target.value })}>{ollamaModels.map(model => <option value={model} key={model}>{model}</option>)}</select></label> : null}
-      {ollamaDetectionResult ? <div className={ollamaDetectionResult.startsWith('Detected ') ? 'ollama-inline-result' : 'error-box'}>{ollamaDetectionResult}</div> : null}
+      {ollamaDetectionResult ? <div className={ollamaDetectionResult.startsWith('Loaded ') ? 'ollama-inline-result' : 'error-box'}>{ollamaDetectionResult}</div> : null}
 
       <label>Temperature<input type="number" min="0" max="2" step="0.1" value={draft.temperature} onChange={e => setDraft({ ...draft, temperature: Number(e.target.value) || 0 })}/></label>
       <div className="section-head setting-gap">SYSTEM PROMPTS · FULLY CUSTOMIZABLE</div>
