@@ -434,7 +434,7 @@ mod tests {
             image_width: 1024,
             image_height: 1024,
             lora_stack: vec![
-                WorkflowLoraInput { file_name: "Anima\\\\Aetheria.safetensors".into(), weight: 0.85, clip_weight: None },
+                WorkflowLoraInput { file_name: "Anima\\Aetheria.safetensors".into(), weight: 0.85, clip_weight: None },
             ],
         }).unwrap();
 
