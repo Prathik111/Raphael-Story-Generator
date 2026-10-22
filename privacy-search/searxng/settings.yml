@@ -43,7 +43,7 @@ search:
 outgoing:
   request_timeout: 15.0
   max_request_timeout: 30.0
-  extra_proxy_timeout: 10.0
+  extra_proxy_timeout: 10
   useragent_suffix: ""
   pool_connections: 16
   enable_http2: false
