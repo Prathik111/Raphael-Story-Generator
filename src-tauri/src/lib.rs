@@ -3508,6 +3508,36 @@ mod tests {
     }
 
     #[test]
+    fn comfy_model_names_are_relative_to_the_correct_models_directory() {
+        assert_eq!(
+            comfy_relative_model_name(
+                r"D:\ComfyUI\models\diffusion_models\anima\model.safetensors",
+                None,
+                "unet",
+                "fallback.safetensors",
+            ),
+            r"anima\model.safetensors"
+        );
+        assert_eq!(
+            comfy_relative_model_name(
+                "",
+                Some("models/loras/Anima/Character.safetensors"),
+                "loras",
+                "fallback.safetensors",
+            ),
+            r"Anima\Character.safetensors"
+        );
+        assert!(checkpoint_uses_unet_loader(
+            r"D:\ComfyUI\models\diffusion_models\anima\model.safetensors",
+            None,
+        ));
+        assert!(!checkpoint_uses_unet_loader(
+            r"D:\ComfyUI\models\checkpoints\model.safetensors",
+            None,
+        ));
+    }
+
+    #[test]
     fn normalize_name_is_stable_for_matching() {
         assert_eq!(normalize_name("  Alice  "), "alice");
     }
