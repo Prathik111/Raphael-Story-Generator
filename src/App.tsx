@@ -462,11 +462,29 @@ function ResearchPanel({ story, researchTrace }: { story: Story; researchTrace: 
 }
 
 
-function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPrompt, onViewPrompt, onQueueImage, buildingPrompt, queueing, progress, images }: { story: Story; chapter: Chapter; onExtractScenes: () => void; extracting: boolean; onBuildPrompt: (scene: Scene) => void; onViewPrompt: (scene: Scene) => void; onQueueImage: (scene: Scene) => void; buildingPrompt: string | null; queueing: string | null; progress: Record<string, ComfyGenerationEvent>; images: Record<string, string>; }) {
+function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPrompt, onViewPrompt, onQueueImage, onBuildAllPrompts, onQueueAllImages, buildingPrompt, queueing, bulkAction, bulkProgress, operationDisabled, progress, images }: {
+  story: Story;
+  chapter: Chapter;
+  onExtractScenes: () => void;
+  extracting: boolean;
+  onBuildPrompt: (scene: Scene) => void;
+  onViewPrompt: (scene: Scene) => void;
+  onQueueImage: (scene: Scene) => void;
+  onBuildAllPrompts: () => void;
+  onQueueAllImages: () => void;
+  buildingPrompt: string | null;
+  queueing: string | null;
+  bulkAction: 'build_prompts' | 'queue_images' | null;
+  bulkProgress: { completed: number; total: number } | null;
+  operationDisabled: boolean;
+  progress: Record<string, ComfyGenerationEvent>;
+  images: Record<string, string>;
+}) {
+  const hasScenes = chapter.scenes.length > 0;
   return <div className="chapter-view">
     <div className="chapter-header hud-panel">
       <div><div className="eyebrow">CHAPTER {String(chapter.number).padStart(2, '0')}</div><h2>{chapter.title}</h2></div>
-      <div className="chapter-header-actions"><span className="status-chip">CANONICAL</span><button className="secondary-btn" onClick={onExtractScenes} disabled={extracting}>{extracting ? 'EXTRACTING…' : chapter.scenes.length ? 'REBUILD SCENES' : 'EXTRACT SCENES'}</button></div>
+      <div className="chapter-header-actions"><span className="status-chip">CANONICAL</span><button className="secondary-btn" onClick={onExtractScenes} disabled={extracting || operationDisabled}>{extracting ? 'EXTRACTING…' : chapter.scenes.length ? 'REBUILD SCENES' : 'EXTRACT SCENES'}</button></div>
     </div>
     <section className="hud-panel reading-panel">
       <div className="section-head">SUMMARY</div><p className="chapter-summary">{chapter.summary}</p>
@@ -479,27 +497,46 @@ function ChapterView({ story, chapter, onExtractScenes, extracting, onBuildPromp
       {chapter.user_directive ? <div className="directive"><span>USER DIRECTIVE</span><p>{chapter.user_directive}</p></div> : null}
     </section>
     <section className="hud-panel scenes-panel">
-      <div className="panel-title-row"><div><div className="section-head">VISUAL SCENES</div><span className="tiny">ONE IMAGEABLE STORY BEAT PER SCENE</span></div><span className="status-chip">{chapter.scenes.length} SCENES</span></div>
-      {chapter.scenes.length === 0 ? <div className="scene-empty">Extract this chapter into visual beats for the manga/image pipeline.</div> : <div className="scene-grid">{chapter.scenes.map(scene => <article className="scene-card" key={scene.id}>
-        <div className="scene-index">SCENE {String(scene.order).padStart(2, '0')}</div><h3>{scene.description}</h3>
-        <div className="scene-meta"><span>{scene.location || 'UNKNOWN LOCATION'}</span><span>{scene.time || 'TIME UNSPECIFIED'}</span></div>
-        <p className="scene-action">{scene.action}</p>
-        <div className="scene-image-size">OUTPUT {scene.image_width}×{scene.image_height}</div>
-        {scene.selected_loras.length ? <div className="scene-lora-strip">{scene.selected_loras.map(lora => <span className="scene-lora-chip" key={lora.id} title={lora.reason}>{lora.role === 'character' ? 'CHAR' : 'POSE'} · {lora.name}</span>)}</div> : null}
-        {images[scene.id] ? <img className="scene-image" src={images[scene.id]} alt={scene.description} /> : null}
-        {(() => {
-          const currentProgress = progress[scene.id];
-          if (!currentProgress || (currentProgress.status !== 'queued' && currentProgress.status !== 'running')) return null;
-          const percent = currentProgress.progress;
-          return <div className="scene-progress">
-            <div className="scene-progress-head"><span>{currentProgress.message}</span><b>{percent == null ? '—' : Math.round(percent) + '%'}</b></div>
-            <div className="scene-progress-track"><div className={'scene-progress-fill ' + (percent == null ? 'indeterminate' : '')} style={percent == null ? undefined : { width: Math.max(0, Math.min(100, percent)) + '%' }} /></div>
-            <small>{currentProgress.current_node ? 'NODE ' + currentProgress.current_node : currentProgress.queue_remaining != null ? 'QUEUE REMAINING ' + currentProgress.queue_remaining : 'COMFYUI EXECUTION'}</small>
-          </div>;
-        })()}
-        {scene.image_error ? <div className="scene-error">{scene.image_error}</div> : null}
-        <div className="scene-footer"><span className={'scene-status ' + scene.image_status}>{scene.image_status.replace('_', ' ').toUpperCase()}</span><div className="scene-actions"><button className="mini-btn" onClick={() => scene.positive_prompt ? onViewPrompt(scene) : onBuildPrompt(scene)} disabled={buildingPrompt === scene.id || queueing === scene.id}>{buildingPrompt === scene.id ? 'BUILDING…' : scene.positive_prompt ? 'VIEW PROMPT' : 'BUILD IMAGE PROMPT'}</button>{scene.positive_prompt ? <button className="mini-btn queue-btn" onClick={() => onQueueImage(scene)} disabled={queueing === scene.id}>{queueing === scene.id ? 'QUEUING…' : scene.image_status === 'queued' || scene.image_status === 'running' ? 'REQUEUE IMAGE' : 'QUEUE IMAGE'}</button> : null}</div></div>
-      </article>)}</div>}
+      <div className="panel-title-row scenes-panel-heading">
+        <div><div className="section-head">VISUAL SCENES</div><span className="tiny">ONE IMAGEABLE STORY BEAT PER SCENE</span></div>
+        <div className="scene-bulk-actions">
+          <span className="status-chip">{chapter.scenes.length} SCENES</span>
+          {hasScenes ? <>
+            <button className="secondary-btn" onClick={onBuildAllPrompts} disabled={operationDisabled}>{bulkAction === 'build_prompts' ? 'BUILDING ' + (bulkProgress?.completed ?? 0) + '/' + (bulkProgress?.total ?? chapter.scenes.length) : 'BUILD ALL PROMPTS'}</button>
+            <button className="primary-btn" onClick={onQueueAllImages} disabled={operationDisabled} title="Queue every scene with a prompt that is not already generated or running">{bulkAction === 'queue_images' ? 'QUEUEING ' + (bulkProgress?.completed ?? 0) + '/' + (bulkProgress?.total ?? chapter.scenes.length) : 'GENERATE ALL IMAGES'}</button>
+          </> : null}
+        </div>
+      </div>
+      {bulkAction && bulkProgress ? <div className="bulk-progress-note">{bulkAction === 'build_prompts' ? 'BUILDING SCENE PROMPTS' : 'SUBMITTING IMAGE JOBS'} · {bulkProgress.completed} / {bulkProgress.total} COMPLETE</div> : null}
+      {chapter.scenes.length === 0 ? <div className="scene-empty">Extract this chapter into visual beats for the manga/image pipeline.</div> : <div className="scene-grid">{chapter.scenes.map(scene => {
+        const canonicalCharacters = scene.characters.map(name => story.bible.characters.find(character =>
+          name.trim() === character.id || name.trim().toLowerCase() === character.name.trim().toLowerCase()
+        )).filter(Boolean);
+        return <article className="scene-card" key={scene.id}>
+          <div className="scene-index">SCENE {String(scene.order).padStart(2, '0')}</div><h3>{scene.description}</h3>
+          <div className="scene-meta"><span>{scene.location || 'UNKNOWN LOCATION'}</span><span>{scene.time || 'TIME UNSPECIFIED'}</span></div>
+          <p className="scene-action">{scene.action}</p>
+          {canonicalCharacters.length ? <div className="scene-character-details">
+            <div className="section-head">CANONICAL CHARACTER DESIGN</div>
+            {canonicalCharacters.map(character => character ? <p key={character.id}><strong>{character.name}</strong><span>Appearance: {character.appearance || 'Not specified'}</span><span>Outfit: {character.clothing || 'Not specified'}</span></p> : null)}
+          </div> : scene.characters.length ? <div className="scene-character-details missing">Character names could not be matched to the Story Bible. Prompt building will require canonical names.</div> : null}
+          <div className="scene-image-size">OUTPUT {scene.image_width}×{scene.image_height}</div>
+          {scene.selected_loras.length ? <div className="scene-lora-strip">{scene.selected_loras.map(lora => <span className="scene-lora-chip" key={lora.id} title={lora.reason}>{lora.role === 'character' ? 'CHAR' : 'POSE'} · {lora.name}</span>)}</div> : null}
+          {images[scene.id] ? <img className="scene-image" src={images[scene.id]} alt={scene.description} /> : null}
+          {(() => {
+            const currentProgress = progress[scene.id];
+            if (!currentProgress || (currentProgress.status !== 'queued' && currentProgress.status !== 'running')) return null;
+            const percent = currentProgress.progress;
+            return <div className="scene-progress">
+              <div className="scene-progress-head"><span>{currentProgress.message}</span><b>{percent == null ? '—' : Math.round(percent) + '%'}</b></div>
+              <div className="scene-progress-track"><div className={'scene-progress-fill ' + (percent == null ? 'indeterminate' : '')} style={percent == null ? undefined : { width: Math.max(0, Math.min(100, percent)) + '%' }} /></div>
+              <small>{currentProgress.current_node ? 'NODE ' + currentProgress.current_node : currentProgress.queue_remaining != null ? 'QUEUE REMAINING ' + currentProgress.queue_remaining : 'COMFYUI EXECUTION'}</small>
+            </div>;
+          })()}
+          {scene.image_error ? <div className="scene-error">{scene.image_error}</div> : null}
+          <div className="scene-footer"><span className={'scene-status ' + scene.image_status}>{scene.image_status.replace('_', ' ').toUpperCase()}</span><div className="scene-actions"><button className="mini-btn" onClick={() => scene.positive_prompt ? onViewPrompt(scene) : onBuildPrompt(scene)} disabled={operationDisabled || buildingPrompt === scene.id || queueing === scene.id}>{buildingPrompt === scene.id ? 'BUILDING…' : scene.positive_prompt ? 'VIEW PROMPT' : 'BUILD IMAGE PROMPT'}</button>{scene.positive_prompt ? <button className="mini-btn queue-btn" onClick={() => onQueueImage(scene)} disabled={operationDisabled || queueing === scene.id}>{queueing === scene.id ? 'QUEUING…' : scene.image_status === 'queued' || scene.image_status === 'running' ? 'REQUEUE IMAGE' : 'QUEUE IMAGE'}</button> : null}</div></div>
+        </article>;
+      })}</div>}
     </section>
   </div>;
 }
@@ -715,6 +752,8 @@ export default function App() {
   const [state, setState] = useState<AppState | null>(null); const [story, setStory] = useState<Story | null>(null);
   const [prompt, setPrompt] = useState(''); const [directive, setDirective] = useState('');
   const [busy, setBusy] = useState(false); const [extracting, setExtracting] = useState(false); const [buildingPrompt, setBuildingPrompt] = useState<string | null>(null); const [queueing, setQueueing] = useState<string | null>(null);
+  const [bulkAction, setBulkAction] = useState<'build_prompts' | 'queue_images' | null>(null);
+  const [bulkProgress, setBulkProgress] = useState<{ completed: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null); const [settingsOpen, setSettingsOpen] = useState(false); const [visualSetupOpen, setVisualSetupOpen] = useState(false); const [promptPreview, setPromptPreview] = useState<Scene | null>(null);
   const [registryStatus, setRegistryStatus] = useState<RegistryStatusDto>({ status: 'starting', url: 'http://127.0.0.1:43217', detail: 'Starting Raphael Model Registry…' });
   const [registryCatalog, setRegistryCatalog] = useState<RegistryCatalog>({ checkpoints: [], checkpoint_total: 0, loras: [], lora_total: 0 });
@@ -1010,7 +1049,7 @@ export default function App() {
     }
   };
   const extractScenes = async (chapter: Chapter) => {
-    if (!story || extracting) return;
+    if (!story || extracting || bulkAction) return;
     if (chapter.scenes.length > 0 && !window.confirm('Rebuild scenes? Existing scene prompts, queue IDs, and image state for this chapter will be replaced.')) {
       return;
     }
@@ -1026,9 +1065,113 @@ export default function App() {
       setExtracting(false);
     }
   };
-  const buildPrompt = async (scene: Scene) => { if (!story || buildingPrompt) return; const chapter = story.chapters.find(c => c.scenes.some(s => s.id === scene.id)); if (!chapter) return; setBuildingPrompt(scene.id); setError(null); try { setStory(await api.buildScenePrompt(story.id, chapter.number, scene.id)); await loadState(); } catch (e) { setError(toErrorMessage(e)); } finally { setBuildingPrompt(null); } };
+
+  const buildPrompt = async (scene: Scene) => {
+    if (!story || buildingPrompt || bulkAction || queueing) return;
+    const chapter = story.chapters.find(c => c.scenes.some(s => s.id === scene.id));
+    if (!chapter) return;
+    setBuildingPrompt(scene.id);
+    setError(null);
+    try {
+      setStory(await api.buildScenePrompt(story.id, chapter.number, scene.id));
+      await loadState();
+    } catch (e) {
+      setError(toErrorMessage(e));
+    } finally {
+      setBuildingPrompt(null);
+    }
+  };
+
+  const buildAllPrompts = async (chapter: Chapter) => {
+    if (!story || bulkAction || buildingPrompt || queueing || extracting || chapter.scenes.length === 0) return;
+    const existingPrompts = chapter.scenes.filter(scene => scene.positive_prompt.trim()).length;
+    if (existingPrompts > 0 && !window.confirm('Build prompts for all ' + chapter.scenes.length + ' scenes? ' + existingPrompts + ' existing prompt(s) will be replaced; images will not be regenerated.')) return;
+
+    setBulkAction('build_prompts');
+    setBulkProgress({ completed: 0, total: chapter.scenes.length });
+    setError(null);
+    const failures: string[] = [];
+    for (const [index, scene] of chapter.scenes.entries()) {
+      try {
+        const updatedStory = await api.buildScenePrompt(story.id, chapter.number, scene.id);
+        setStory(updatedStory);
+      } catch (e) {
+        failures.push('Scene ' + String(scene.order).padStart(2, '0') + ': ' + toErrorMessage(e));
+      }
+      setBulkProgress({ completed: index + 1, total: chapter.scenes.length });
+    }
+
+    try {
+      setStory(await api.getStory(story.id));
+      await loadState();
+    } catch (e) {
+      failures.push('Refresh: ' + toErrorMessage(e));
+    }
+
+    setError(failures.length
+      ? 'Prompt building finished with ' + failures.length + ' error(s): ' + failures.slice(0, 3).join(' · ') + (failures.length > 3 ? ' · …' : '')
+      : null);
+    setBulkAction(null);
+    setBulkProgress(null);
+  };
+
   const viewPrompt = (scene: Scene) => setPromptPreview(scene);
-  const queueImage = async (scene: Scene) => { if (!story || queueing) return; const chapter = story.chapters.find(c => c.scenes.some(s => s.id === scene.id)); if (!chapter) return; setQueueing(scene.id); setError(null); try { setStory(await api.queueSceneImage(story.id, chapter.number, scene.id)); await loadState(); } catch (e) { setError(toErrorMessage(e)); } finally { setQueueing(null); } };
+
+  const queueImage = async (scene: Scene) => {
+    if (!story || queueing || bulkAction || buildingPrompt) return;
+    const chapter = story.chapters.find(c => c.scenes.some(s => s.id === scene.id));
+    if (!chapter) return;
+    setQueueing(scene.id);
+    setError(null);
+    try {
+      setStory(await api.queueSceneImage(story.id, chapter.number, scene.id));
+      await loadState();
+    } catch (e) {
+      setError(toErrorMessage(e));
+    } finally {
+      setQueueing(null);
+    }
+  };
+
+  const generateAllImages = async (chapter: Chapter) => {
+    if (!story || bulkAction || buildingPrompt || queueing || extracting || chapter.scenes.length === 0) return;
+    const missingPrompts = chapter.scenes.filter(scene => !scene.positive_prompt.trim());
+    if (missingPrompts.length) {
+      setError('Build all prompts first. ' + missingPrompts.length + ' scene(s) still need an image prompt.');
+      return;
+    }
+    const targets = chapter.scenes.filter(scene => !['generated', 'queued', 'running'].includes(scene.image_status));
+    if (!targets.length) {
+      setError('All scene images are already generated or queued/running. Individual scenes can still be requeued.');
+      return;
+    }
+
+    setBulkAction('queue_images');
+    setBulkProgress({ completed: 0, total: targets.length });
+    setError(null);
+    const failures: string[] = [];
+    for (const [index, scene] of targets.entries()) {
+      try {
+        const updatedStory = await api.queueSceneImage(story.id, chapter.number, scene.id);
+        setStory(updatedStory);
+      } catch (e) {
+        failures.push('Scene ' + String(scene.order).padStart(2, '0') + ': ' + toErrorMessage(e));
+      }
+      setBulkProgress({ completed: index + 1, total: targets.length });
+    }
+
+    try {
+      setStory(await api.getStory(story.id));
+      await loadState();
+    } catch (e) {
+      failures.push('Refresh: ' + toErrorMessage(e));
+    }
+    setError(failures.length
+      ? 'Image queueing finished with ' + failures.length + ' error(s): ' + failures.slice(0, 3).join(' · ') + (failures.length > 3 ? ' · …' : '')
+      : null);
+    setBulkAction(null);
+    setBulkProgress(null);
+  };
 
   const currentChapter = story
     ? story.chapters.find(chapter => chapter.number === selectedChapterNumber) || story.chapters[story.chapters.length - 1] || null
@@ -1070,7 +1213,7 @@ export default function App() {
 
     <div className="workspace">
       <aside className="sidebar">
-        <div className="sidebar-head"><div><div className="eyebrow">LIBRARY</div><h2>STORIES</h2></div><button className="square-btn" disabled={busy || extracting || Boolean(buildingPrompt) || Boolean(queueing)} onClick={() => { setStory(null); setPrompt(''); setDirective(''); setPromptPreview(null); }}>+</button></div>
+        <div className="sidebar-head"><div><div className="eyebrow">LIBRARY</div><h2>STORIES</h2></div><button className="square-btn" disabled={busy || extracting || Boolean(buildingPrompt) || Boolean(queueing) || bulkAction !== null} onClick={() => { setStory(null); setPrompt(''); setDirective(''); setPromptPreview(null); }}>+</button></div>
         <div className="story-list">{state.stories.length === 0 ? <div className="empty-sidebar">No stories yet.<br/>Create the first one from the story prompt.</div> : state.stories.map(item => <StoryCard key={item.id} story={item} selected={story?.id === item.id} disabled={busy || extracting || Boolean(buildingPrompt) || Boolean(queueing)} onClick={() => void selectStory(item.id)}/>)}</div>
         <ServiceHealthPanel status={serviceStatus}/>
         <div className="sidebar-foot">
@@ -1088,7 +1231,7 @@ export default function App() {
             <div className="story-header-tags"><TagRow values={story.metadata.tone} tone="tone"/></div>
           </section>
           <IntroductionView story={story}/>
-          {currentChapter ? <ChapterView story={story} chapter={currentChapter} onExtractScenes={() => void extractScenes(currentChapter)} extracting={extracting} onBuildPrompt={scene => void buildPrompt(scene)} onViewPrompt={viewPrompt} onQueueImage={queueImage} buildingPrompt={buildingPrompt} queueing={queueing} progress={comfyProgress} images={sceneImages}/> : null}
+          {currentChapter ? <ChapterView story={story} chapter={currentChapter} onExtractScenes={() => void extractScenes(currentChapter)} extracting={extracting} onBuildPrompt={scene => void buildPrompt(scene)} onViewPrompt={viewPrompt} onQueueImage={queueImage} onBuildAllPrompts={() => void buildAllPrompts(currentChapter)} onQueueAllImages={() => void generateAllImages(currentChapter)} buildingPrompt={buildingPrompt} queueing={queueing} bulkAction={bulkAction} bulkProgress={bulkProgress} operationDisabled={busy || extracting || Boolean(buildingPrompt) || Boolean(queueing) || bulkAction !== null} progress={comfyProgress} images={sceneImages}/> : null}
           <section className="hud-panel continuation-panel">
             <div className="section-head">CONTINUE THE STORY</div>
             <h2>Chapter {story.chapters.length + 1}</h2>
