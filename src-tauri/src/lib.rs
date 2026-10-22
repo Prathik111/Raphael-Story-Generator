@@ -1332,6 +1332,44 @@ fn clean_json(raw: &str) -> &str {
     trimmed
 }
 
+fn merge_missing_chapter_fields(
+    chapter: &mut ChapterDraft,
+    repair: &Value,
+) -> Result<Vec<&'static str>, String> {
+    let fields = repair.get("chapter").filter(|value| value.is_object()).unwrap_or(repair);
+    let mut repaired = Vec::new();
+
+    if chapter.title.trim().is_empty() {
+        let replacement = fields.get("title").and_then(Value::as_str).unwrap_or_default().trim();
+        if !replacement.is_empty() {
+            chapter.title = replacement.to_string();
+            repaired.push("title");
+        }
+    }
+    if chapter.summary.trim().is_empty() {
+        let replacement = fields.get("summary").and_then(Value::as_str).unwrap_or_default().trim();
+        if !replacement.is_empty() {
+            chapter.summary = replacement.to_string();
+            repaired.push("summary");
+        }
+    }
+    if chapter.text.trim().is_empty() {
+        let replacement = fields.get("text").and_then(Value::as_str).unwrap_or_default().trim();
+        if !replacement.is_empty() {
+            chapter.text = replacement.to_string();
+            repaired.push("text");
+        }
+    }
+
+    if chapter.title.trim().is_empty() || chapter.text.trim().is_empty() {
+        return Err("repair response did not provide a non-empty chapter title and text".into());
+    }
+    if chapter.summary.trim().is_empty() {
+        return Err("repair response did not provide a non-empty chapter summary".into());
+    }
+    Ok(repaired)
+}
+
 fn validate_initial_response(parsed: &InitialResponse) -> AppResult<()> {
     if parsed.title.trim().is_empty() {
         return Err(AppError::ModelResponse("generated story title is empty".into()));
@@ -1775,7 +1813,7 @@ JSON shape:
 {}
 
 Use the web-research facts only when they are supported by the cited sources. Do not invent external facts that are absent from the supplied research.
-Every empty string in the example JSON is a placeholder, not a value to copy. Populate required string fields with meaningful content. In particular, introduction must be a non-empty, engaging 2–4 sentence introduction that sets up the story before Chapter 1. Chapter title, summary, and text must also be non-empty.
+Every empty string in the example JSON is a placeholder, not a value to copy. Populate required string fields with meaningful content. In particular, introduction must be a non-empty, engaging 2–4 sentence introduction that sets up the story before Chapter 1. Chapter title, summary, and text must also be non-empty. Chapter 1 must be an actual complete chapter with a beginning, development, and ending hook; aim for roughly 500–800 words of narrative text, not a summary or outline.
 Return the JSON shape above.", prompt.trim(), research_context, schema_hint);
     emit_pipeline(store.app(), "story_architect", "started", "Generating story bible and opening chapter");
     let raw = chat(store.app(), &settings, "story_architect", system, &architect_prompt).await?;
@@ -1846,6 +1884,64 @@ Return the JSON shape above.", prompt.trim(), research_context, schema_hint);
             "Filled the missing story introduction without regenerating the Story Bible",
         );
     }
+    // Compact local models can still copy empty chapter placeholders from the schema.
+    // Repair only the missing Chapter 1 fields, keeping all other generated canon intact.
+    if parsed.chapter.title.trim().is_empty()
+        || parsed.chapter.summary.trim().is_empty()
+        || parsed.chapter.text.trim().is_empty()
+    {
+        emit_pipeline(
+            store.app(),
+            "chapter_one_repair",
+            "started",
+            "Story Architect returned an incomplete Chapter 1; generating the missing fields",
+        );
+
+        let character_context = parsed.characters.iter()
+            .map(|character| format!(
+                "{} — role: {}; appearance: {}; clothing: {}",
+                character.name, character.role, character.appearance, character.clothing
+            ))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let repair_system = "You are Raphael Chapter One Repairer. Complete missing fields for Chapter 1 of an existing story. Preserve all supplied canon. Return only valid JSON with non-empty string fields title, summary, and text. The text must be a complete narrative chapter, not an outline.";
+        let repair_prompt = format!(
+            "Complete the missing Chapter 1 fields for this story. Use approximately 500–800 words for text, with a coherent beginning, development, and ending hook. Do not return empty strings. Return JSON with exactly these fields: title, summary, text. Fill each field below only if it is marked MISSING, but always return all three fields.\n\nUSER STORY REQUEST:\n{}\n\nSTORY TITLE:\n{}\n\nPREMISE:\n{}\n\nCENTRAL CONFLICT:\n{}\n\nWORLD SETTING:\n{}\n\nCHARACTERS:\n{}\n\nINTRODUCTION:\n{}\n\nEXISTING CHAPTER TITLE: {}\nEXISTING CHAPTER SUMMARY: {}\nEXISTING CHAPTER TEXT (context only):\n{}\n\nRequired JSON shape: {{\"title\":\"non-empty chapter title\",\"summary\":\"non-empty summary\",\"text\":\"complete chapter narrative\"}}",
+            prompt.trim(),
+            parsed.title,
+            parsed.premise,
+            parsed.central_conflict,
+            parsed.world_setting,
+            if character_context.is_empty() { "(no characters supplied)" } else { &character_context },
+            parsed.introduction,
+            if parsed.chapter.title.trim().is_empty() { "MISSING" } else { parsed.chapter.title.as_str() },
+            if parsed.chapter.summary.trim().is_empty() { "MISSING" } else { parsed.chapter.summary.as_str() },
+            parsed.chapter.text.chars().take(2500).collect::<String>(),
+        );
+
+        let repaired_raw = chat(
+            store.app(),
+            &settings,
+            "chapter_one_repair",
+            repair_system,
+            &repair_prompt,
+        ).await?;
+        let repaired_value: Value = serde_json::from_str(clean_json(&repaired_raw))
+            .map_err(|error| AppError::ModelResponse(format!(
+                "Chapter 1 repair returned invalid JSON: {}; raw output starts with: {}",
+                error,
+                &repaired_raw.chars().take(200).collect::<String>()
+            )))?;
+        let repaired_fields = merge_missing_chapter_fields(&mut parsed.chapter, &repaired_value)
+            .map_err(|error| AppError::ModelResponse(format!("Chapter 1 repair failed: {error}")))?;
+        emit_pipeline(
+            store.app(),
+            "chapter_one_repair",
+            "completed",
+            format!("Repaired missing Chapter 1 field(s): {}", repaired_fields.join(", ")),
+        );
+    }
+
     validate_initial_response(&parsed)?;
     let story_id = Uuid::new_v4().to_string();
     let mut characters = Vec::with_capacity(parsed.characters.len());
@@ -2724,6 +2820,51 @@ pub fn run() {
 mod tests {
     use super::*;
 
+
+    #[test]
+    fn chapter_repair_fills_only_missing_fields() {
+        let mut chapter = ChapterDraft {
+            title: "Already valid".into(),
+            summary: String::new(),
+            text: String::new(),
+            ..ChapterDraft::default()
+        };
+        let repair = json!({
+            "title": "Should not replace existing title",
+            "summary": "A complete summary.",
+            "text": "A complete chapter."
+        });
+
+        let repaired = merge_missing_chapter_fields(&mut chapter, &repair).unwrap();
+        assert_eq!(chapter.title, "Already valid");
+        assert_eq!(chapter.summary, "A complete summary.");
+        assert_eq!(chapter.text, "A complete chapter.");
+        assert_eq!(repaired, vec!["summary", "text"]);
+    }
+
+    #[test]
+    fn chapter_repair_accepts_nested_chapter_shape() {
+        let mut chapter = ChapterDraft::default();
+        let repair = json!({
+            "chapter": {
+                "title": "Chapter One",
+                "summary": "The hero begins the journey.",
+                "text": "A full narrative."
+            }
+        });
+
+        assert!(merge_missing_chapter_fields(&mut chapter, &repair).is_ok());
+        assert_eq!(chapter.title, "Chapter One");
+        assert_eq!(chapter.summary, "The hero begins the journey.");
+        assert_eq!(chapter.text, "A full narrative.");
+    }
+
+    #[test]
+    fn chapter_repair_rejects_still_empty_required_fields() {
+        let mut chapter = ChapterDraft::default();
+        let repair = json!({"title": "", "summary": "", "text": ""});
+        assert!(merge_missing_chapter_fields(&mut chapter, &repair).is_err());
+    }
 
     #[test]
     fn research_subject_extractor_skips_random_story_requests() {
