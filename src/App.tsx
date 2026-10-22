@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, subscribeToComfy, subscribeToLlm, subscribeToPipeline } from './tauri';
-import type { AppSettings, AppState, Chapter, ComfyGenerationEvent, LlmGenerationEvent, OllamaLanHostStatus, PipelineEvent, RegistryCatalog, RegistryStatusDto, Scene, ServiceStatusBoard, Story, StoryVisualSetup } from './types';
+import type { AppSettings, AppState, Chapter, ComfyGenerationEvent, LlmGenerationEvent, PipelineEvent, RegistryCatalog, RegistryStatusDto, Scene, ServiceStatusBoard, Story, StoryVisualSetup, WebHostStatus } from './types';
 
 function ReferenceHudBackground() {
   return <iframe className="raphael-bg" src="./reference/index.html" title="Raphael background" aria-hidden="true" />;
@@ -770,6 +770,80 @@ function ResearchActivityPanel({ pipeline, generations }: {
   </section>;
 }
 
+function LanWebHostControl() {
+  const [host, setHost] = useState<WebHostStatus>({
+    running: false, port: 1425, lan_url: null, detail: 'Checking LAN host status…',
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let disposed = false;
+    void api.getWebHostStatus()
+      .then(status => { if (!disposed) setHost(status); })
+      .catch(reason => { if (!disposed) setError(toErrorMessage(reason)); });
+    return () => { disposed = true; };
+  }, []);
+
+  const toggleHost = async () => {
+    setBusy(true);
+    setError(null);
+    setCopied(false);
+    try {
+      const status = host.running ? await api.stopWebHost() : await api.startWebHost();
+      setHost(status);
+    } catch (reason) {
+      setError(toErrorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copyAddress = async () => {
+    if (!host.lan_url) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(host.lan_url);
+      } else {
+        const input = document.createElement('textarea');
+        input.value = host.lan_url;
+        input.style.position = 'fixed';
+        input.style.opacity = '0';
+        document.body.appendChild(input);
+        input.focus();
+        input.select();
+        const success = document.execCommand('copy');
+        input.remove();
+        if (!success) throw new Error('Copy is unavailable in this browser.');
+      }
+      setCopied(true);
+    } catch (reason) {
+      setError(toErrorMessage(reason));
+    }
+  };
+
+  return <div className="lan-web-host">
+    <button
+      type="button"
+      className={'lan-web-host-toggle' + (host.running ? ' active' : '')}
+      onClick={() => void toggleHost()}
+      disabled={busy}
+      title={host.running ? 'Stop LAN web hosting' : 'Share Raphael with devices on this LAN'}
+    >
+      <span className="lan-web-host-dot" />
+      {busy ? (host.running ? 'STOPPING…' : 'STARTING…') : host.running ? 'WEB HOST ON' : 'WEB HOST'}
+    </button>
+    {host.running && host.lan_url ? <div className="lan-web-host-popover">
+      <div className="eyebrow">RAPHAEL LAN ADDRESS</div>
+      <code>{host.lan_url}</code>
+      <button type="button" className="mini-btn" onClick={() => void copyAddress()}>{copied ? 'COPIED' : 'COPY ADDRESS'}</button>
+      <small>Open this address on another device connected to the same trusted LAN.</small>
+    </div> : null}
+    {error ? <div className="lan-web-host-error" role="alert">{error}</div> : null}
+  </div>;
+}
+
 function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey, onClose, onError }: { settings: AppSettings; llmApiKeyConfigured: boolean; onSave: (settings: AppSettings) => Promise<void>; onClearApiKey: () => Promise<void>; onClose: () => void; onError: (message: string) => void }) {
   const [draft, setDraft] = useState(settings);
   const [busy, setBusy] = useState(false);
@@ -778,24 +852,7 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
   const [ollamaDetecting, setOllamaDetecting] = useState(false);
   const [ollamaDetectionResult, setOllamaDetectionResult] = useState<string | null>(null);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
-  const [baseUrlModels, setBaseUrlModels] = useState<string[]>([]);
-  const [baseUrlModelsMessage, setBaseUrlModelsMessage] = useState<string | null>(null);
-  const [baseUrlModelsBusy, setBaseUrlModelsBusy] = useState(false);
-  const [ollamaHost, setOllamaHost] = useState<OllamaLanHostStatus>({
-    running: false, port: settings.ollama_lan_port, lan_url: null,
-    openai_base_url: null, models: [], detail: 'Checking LAN host status…',
-  });
-  const [ollamaHostBusy, setOllamaHostBusy] = useState(false);
-  const [ollamaHostMessage, setOllamaHostMessage] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let disposed = false;
-    void api.getOllamaLanHostStatus(settings.ollama_lan_port)
-      .then(status => { if (!disposed) setOllamaHost(status); })
-      .catch(error => { if (!disposed) setOllamaHostMessage(toErrorMessage(error)); });
-    return () => { disposed = true; };
-  }, []);
 
   const save = async () => {
     setBusy(true);
@@ -838,7 +895,7 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
         llm_base_url: detected.openai_base_url,
         llm_model: selected || current.llm_model,
       }));
-      setOllamaDetectionResult(`Detected ${detected.models.length} local model(s) at ${detected.base_url}. Selected ${selected || detected.models[0]}.`);
+      setOllamaDetectionResult(`Loaded ${detected.models.length} model(s) from this host. Selected ${selected || detected.models[0]}.`);
     } catch (error) {
       setOllamaDetectionResult(toErrorMessage(error));
     } finally {
@@ -846,112 +903,22 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
     }
   };
 
-  const loadModelsFromBaseUrl = async () => {
-    setBaseUrlModelsBusy(true);
-    setBaseUrlModelsMessage(null);
-    try {
-      const configuredBase = draft.llm_base_url.trim().replace(/\/+$/, '');
-      if (!configuredBase) throw new Error('Enter the Raphael/OpenAI-compatible Base URL first.');
-      const base = new URL(configuredBase);
-      if (base.protocol !== 'http:' && base.protocol !== 'https:') {
-        throw new Error('The Base URL must use HTTP or HTTPS.');
-      }
-      const path = base.pathname.replace(/\/+$/, '');
-      base.pathname = path.toLowerCase().endsWith('/v1') ? `${path}/models` : `${path}/v1/models`;
-      base.search = '';
-      base.hash = '';
-      const response = await fetch(base.toString(), { headers: { Accept: 'application/json' } });
-      if (!response.ok) throw new Error(`Model list request failed: HTTP ${response.status} from ${base.toString()}`);
-      const payload = await response.json() as { data?: Array<{ id?: string; name?: string }>; models?: Array<{ name?: string; model?: string }> };
-      const models = Array.isArray(payload.data)
-        ? payload.data.map(item => item.id || item.name || '').filter(Boolean)
-        : Array.isArray(payload.models)
-          ? payload.models.map(item => item.name || item.model || '').filter(Boolean)
-          : [];
-      const uniqueModels = [...new Set(models)].sort((a, b) => a.localeCompare(b));
-      if (!uniqueModels.length) throw new Error('The configured Base URL returned no models. Ensure it points to the Raphael LAN host and supports GET /v1/models.');
-      setBaseUrlModels(uniqueModels);
-      const selected = uniqueModels.includes(draft.llm_model) ? draft.llm_model : uniqueModels[0];
-      setDraft(current => ({ ...current, llm_model: selected }));
-      setBaseUrlModelsMessage(`Loaded ${uniqueModels.length} model(s) from ${base.origin}.`);
-    } catch (error) {
-      setBaseUrlModels([]);
-      setBaseUrlModelsMessage(toErrorMessage(error));
-    } finally {
-      setBaseUrlModelsBusy(false);
-    }
-  };
-
-  const startOllamaLanHost = async () => {
-    setOllamaHostBusy(true);
-    setOllamaHostMessage(null);
-    try {
-      const status = await api.startOllamaLanHost(draft.ollama_lan_port, draft.llm_base_url);
-      setOllamaHost(status);
-      setOllamaHostMessage(status.detail || 'Ollama LAN host started.');
-    } catch (error) {
-      setOllamaHostMessage(toErrorMessage(error));
-    } finally {
-      setOllamaHostBusy(false);
-    }
-  };
-
-  const stopOllamaLanHost = async () => {
-    setOllamaHostBusy(true);
-    setOllamaHostMessage(null);
-    try {
-      const status = await api.stopOllamaLanHost(ollamaHost.port || draft.ollama_lan_port);
-      setOllamaHost(status);
-      setOllamaHostMessage('Ollama LAN host stopped.');
-    } catch (error) {
-      setOllamaHostMessage(toErrorMessage(error));
-    } finally {
-      setOllamaHostBusy(false);
-    }
-  };
-
-
   return <div className="settings-backdrop" onMouseDown={onClose}><section className="settings-panel hud-panel" onMouseDown={e => e.stopPropagation()}>
     <header className="settings-header"><div><div className="eyebrow">RAPHAEL CORE</div><h2>ENGINE SETTINGS</h2></div><button className="settings-close" onClick={onClose}>×</button></header>
     <div className="settings-scroll">
       <div className="section-head">OPENAI-COMPATIBLE LLM</div>
       <label>Base URL<input value={draft.llm_base_url} onChange={e => setDraft({ ...draft, llm_base_url: e.target.value })} placeholder="http://127.0.0.1:11434/v1"/></label>
-      <label>Model<input value={draft.llm_model} onChange={e => setDraft({ ...draft, llm_model: e.target.value })} placeholder="qwen3:8b"/></label>
+      <label>Model{ollamaModels.length ? <select value={draft.llm_model} onChange={e => setDraft({ ...draft, llm_model: e.target.value })}>{ollamaModels.map(model => <option value={model} key={model}>{model}</option>)}</select> : <input value={draft.llm_model} onChange={e => setDraft({ ...draft, llm_model: e.target.value })} placeholder="qwen3:8b"/>}</label>
       <label>API key<input type="password" value={draft.llm_api_key} onChange={e => setDraft({ ...draft, llm_api_key: e.target.value })} placeholder={llmApiKeyConfigured ? 'Stored securely · leave blank to keep current key' : 'Optional for local endpoints'}/>{llmApiKeyConfigured ? <button type="button" className="mini-btn settings-clear-key" onClick={() => void onClearApiKey()}>CLEAR STORED KEY</button> : null}</label>
 
       <div className="section-head setting-gap">OLLAMA AUTO-DETECTION</div>
-      <small className="settings-hint">Detects models from a local Ollama API only. The selected model and OpenAI-compatible URL are filled into the fields above; detection does not query remote endpoints.</small>
+      <small className="settings-hint">Loads the models installed on the computer running Raphael. When you open Raphael from another device on the LAN, this dropdown still lists the host's models. Ollama stays on the host; only the Raphael web app is shared.</small>
       <div className="ollama-action-row">
-        <button type="button" className="secondary-btn" onClick={() => void detectOllamaModels()} disabled={ollamaDetecting || ollamaHostBusy}>{ollamaDetecting ? 'SCANNING…' : 'DETECT LOCAL MODELS'}</button>
+        <button type="button" className="secondary-btn" onClick={() => void detectOllamaModels()} disabled={ollamaDetecting || ollamaHostBusy}>{ollamaDetecting ? 'LOADING…' : 'LOAD HOST MODELS'}</button>
         {ollamaModels.length ? <span className="tiny">{ollamaModels.length} MODEL(S)</span> : null}
       </div>
       {ollamaModels.length ? <label>Detected model<select value={draft.llm_model} onChange={e => setDraft({ ...draft, llm_model: e.target.value })}>{ollamaModels.map(model => <option value={model} key={model}>{model}</option>)}</select></label> : null}
       {ollamaDetectionResult ? <div className={ollamaDetectionResult.startsWith('Detected ') ? 'ollama-inline-result' : 'error-box'}>{ollamaDetectionResult}</div> : null}
-
-      <div className="section-head setting-gap">MODELS FROM CONFIGURED BASE URL</div>
-      <small className="settings-hint">Load the model list from the OpenAI-compatible Base URL above. On a LAN client, use the host's Raphael proxy URL ending in /v1; the dropdown queries that proxy's GET /v1/models route. It does not connect to or expose the host's Ollama port directly.</small>
-      <div className="ollama-action-row">
-        <button type="button" className="secondary-btn" onClick={() => void loadModelsFromBaseUrl()} disabled={baseUrlModelsBusy || ollamaHostBusy}>{baseUrlModelsBusy ? 'LOADING MODELS…' : 'LOAD MODELS FROM BASE URL'}</button>
-        {baseUrlModels.length ? <span className="tiny">{baseUrlModels.length} HOST MODEL(S)</span> : null}
-      </div>
-      {baseUrlModels.length ? <label>Available model<select value={baseUrlModels.includes(draft.llm_model) ? draft.llm_model : ''} onChange={e => setDraft(current => ({ ...current, llm_model: e.target.value }))}><option value="" disabled>Select a host model</option>{baseUrlModels.map(model => <option value={model} key={model}>{model}</option>)}</select></label> : null}
-      {baseUrlModelsMessage ? <div className={baseUrlModels.length ? 'ollama-inline-result' : 'error-box'}>{baseUrlModelsMessage}</div> : null}
-
-      <div className="section-head setting-gap">HOST OLLAMA ON LAN</div>
-      <small className="settings-hint">Share this PC's local Ollama models with devices on the same LAN without an API key or Bearer token. Raphael binds only to a detected private IPv4 address. This is unauthenticated plain HTTP: anyone who can reach this port can use the host's installed models. Use only on a trusted LAN, do not expose the port through router forwarding, and keep Ollama itself bound to 127.0.0.1:11434.</small>
-      <label>LAN port<input type="number" min="1024" max="65535" step="1" value={draft.ollama_lan_port} onChange={e => setDraft({ ...draft, ollama_lan_port: Math.max(1024, Math.min(65535, Number(e.target.value) || 11435)) })} disabled={ollamaHost.running || ollamaHostBusy}/></label>
-      <div className="ollama-action-row">
-        {ollamaHost.running
-          ? <button type="button" className="secondary-btn" onClick={() => void stopOllamaLanHost()} disabled={ollamaHostBusy}>{ollamaHostBusy ? 'STOPPING…' : 'STOP LAN HOST'}</button>
-          : <button type="button" className="primary-btn" onClick={() => void startOllamaLanHost()} disabled={ollamaHostBusy || ollamaDetecting}>{ollamaHostBusy ? 'STARTING…' : 'HOST OLLAMA ON LAN'}</button>}
-        <span className={'trace-live ' + (ollamaHost.running ? 'active' : '')}><i />{ollamaHost.running ? 'HOSTING' : 'STOPPED'}</span>
-      </div>
-      {ollamaHost.running ? <div className="ollama-host-details">
-        <div><span className="section-head">OPENAI-COMPATIBLE BASE URL</span><code>{ollamaHost.openai_base_url}</code></div>
-        <div><span className="section-head">HOST MODELS</span><p>{ollamaHost.models.join(' · ')}</p></div>
-        <small className="settings-hint">On another device, set its LLM Base URL to the address above and leave API key blank. The proxy has no authentication, allows inference and read-only model-list routes, and blocks model pull/delete endpoints.</small>
-      </div> : null}
-      {ollamaHostMessage ? <div className={ollamaHost.running && ollamaHostMessage.includes('running') ? 'ollama-inline-result' : 'settings-inline-error error-box'}>{ollamaHostMessage}</div> : null}
 
       <label>Temperature<input type="number" min="0" max="2" step="0.1" value={draft.temperature} onChange={e => setDraft({ ...draft, temperature: Number(e.target.value) || 0 })}/></label>
       <div className="section-head setting-gap">SYSTEM PROMPTS · FULLY CUSTOMIZABLE</div>
@@ -1459,6 +1426,7 @@ export default function App() {
     <BackgroundRaphael />
     <header className="topbar">
       <div className="brand"><PulseMark/><div><div className="brand-title">RAPHAEL</div><div className="brand-subtitle">STORY GENERATOR</div></div></div>
+      {!api.isWebApp ? <LanWebHostControl /> : null}
     </header>
 
     <div className="workspace">
