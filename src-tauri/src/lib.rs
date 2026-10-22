@@ -58,7 +58,7 @@ Preserve chronological order, character identity, outfit state, location and dia
 Every scene field description, location, time, action, composition, and dialogue must be a string. characters must be an array of string character names exactly matching the canonical character names. Do not return objects or nested structures for any scene field; write structured visual details as natural-language strings.
 Return ONLY valid JSON."#;
 
-const DEFAULT_LORA_SELECTOR_SYSTEM_PROMPT: &str = r#"You are Raphael LoRA Selector. Select dynamic LoRAs for one image scene.
+const DEFAULT_LORA_SELECTOR_SYSTEM_PROMPT: &str = r#"You are Raphael Character LoRA Selector. Select existing character-specific LoRAs for the named characters in one image scene.
 
 The candidate metadata comes directly from the Raphael Model Registry. Treat these fields as authoritative:
 - MODEL TYPE
@@ -66,14 +66,11 @@ The candidate metadata comes directly from the Raphael Model Registry. Treat the
 - TAGS
 - SHORT DESCRIPTION
 
-Use tags and the short description to determine the LoRA's semantic purpose. Use the model name only as supporting context. Do not infer a capability that is not supported by the supplied metadata.
+Only select models whose Registry tags explicitly identify them as character LoRAs and whose name, tags, or description match a character present in this scene. Never substitute another character's LoRA because it has a similar art style or genre. Never select style, concept, pose, background, or general-purpose LoRAs; locked style LoRAs are handled separately.
 
-The story's style LoRAs are LOCKED separately and must never be replaced, supplemented or switched here.
-Choose at most one character LoRA for each of the first two visible primary characters, and at most one concept/pose LoRA when it materially helps the scene.
-Do not select style LoRAs. Do not select the same LoRA twice. Do not invent IDs.
-Only choose IDs from the supplied candidate lists.
-If no candidate genuinely matches a slot, omit that slot.
-Return ONLY valid JSON."#;
+Select at most one LoRA for each canonical scene character and at most two character LoRAs per scene. Use only candidate IDs supplied in the prompt. If no candidate clearly matches a character, omit that character instead of guessing. Explain the matching Registry metadata in the reason field.
+
+Return ONLY valid JSON using the requested schema."#;
 
 const KEYRING_SERVICE: &str = "com.raphael.storygenerator";
 const KEYRING_USER: &str = "llm-api-key";
@@ -1626,29 +1623,41 @@ fn lexical_score(query: &str, candidate: &str) -> i32 {
         .count() as i32
 }
 
-fn looks_like_style_lora(value: &str) -> bool {
-    let text = value.to_lowercase();
-    [
-        "style", "anime", "illustration", "lineart", "line art", "watercolor",
-        "oil", "cinematic", "render", "aesthetic", "artstyle", "art style",
-        "painting", "sketch",
-    ]
-    .iter()
-    .any(|marker| text.contains(marker))
+fn is_character_lora(model: &registry::RegistryLoraCandidate) -> bool {
+    // Keep category semantics aligned with Raphael Image Generator's Registry
+    // discovery: only Registry-tagged character LoRAs enter the character pool.
+    model.tags.iter().any(|tag| {
+        tag.trim()
+            .to_ascii_lowercase()
+            .chars()
+            .filter(|character| character.is_ascii_alphanumeric())
+            .collect::<String>() == "character"
+    })
 }
 
-fn looks_like_concept_pose_lora(value: &str) -> bool {
-    let text = value.to_lowercase();
-    [
-        "pose", "concept", "action", "gesture", "motion", "dynamic",
-        "composition", "camera", "perspective", "anatomy", "foreshorten",
-    ]
-    .iter()
-    .any(|marker| text.contains(marker))
-}
+fn character_lora_match_score(
+    character_name: &str,
+    model: &registry::RegistryLoraCandidate,
+) -> i32 {
+    let metadata = format!(
+        "{} {} {}",
+        model.name,
+        model.tags.join(" "),
+        model.description.as_deref().unwrap_or_default()
+    );
+    let stop_words = [
+        "the", "and", "for", "with", "from", "into", "character", "characters",
+        "lora", "anime", "official", "model", "version",
+    ];
+    let name_tokens = text_tokens(character_name)
+        .into_iter()
+        .filter(|token| !stop_words.contains(&token.as_str()))
+        .collect::<std::collections::HashSet<_>>();
+    let metadata_tokens = text_tokens(&metadata)
+        .into_iter()
+        .collect::<std::collections::HashSet<_>>();
 
-fn can_select_concept_pose(concept_count: usize) -> bool {
-    concept_count == 0
+    name_tokens.intersection(&metadata_tokens).count() as i32
 }
 
 fn lora_candidate_text(model: &registry::RegistryLoraCandidate) -> String {
@@ -2584,169 +2593,185 @@ async fn select_scene_loras(
         return Err(AppError::Registry("this story has no base checkpoint configured".into()));
     }
 
-    let candidates = registry.compatible_loras(&story.visual_config.checkpoint_id).await?;
-    if candidates.is_empty() {
-        return Err(AppError::Registry("no compatible LoRAs are registered for the selected checkpoint".into()));
-    }
-
-    let scene_query = format!(
-        "{} {} {} {} {} {}",
-        scene.description, scene.action, scene.composition, scene.location, scene.time,
-        scene.characters.join(" ")
-    );
-    let character_text = story.bible.characters.iter()
+    let characters = story.bible.characters.iter()
         .filter(|character| scene.characters.iter().any(|name| {
             normalize_name(name) == normalize_name(&character.name) || name.trim() == character.id
         }))
         .take(2)
+        .collect::<Vec<_>>();
+    if characters.is_empty() {
+        emit_pipeline(app, "lora_selection", "completed", "No canonical character is present in this scene; no character LoRA is needed");
+        return Ok(Vec::new());
+    }
+
+    emit_pipeline(
+        app,
+        "character_lora_catalog",
+        "started",
+        format!("Searching the Registry for character LoRAs matching {}", characters.iter().map(|character| character.name.as_str()).collect::<Vec<_>>().join(", ")),
+    );
+    let candidates = registry.compatible_loras(&story.visual_config.checkpoint_id).await?;
+
+    // Match only compatible, explicitly character-tagged Registry entries to
+    // the canonical character names. Generic style, pose and concept LoRAs
+    // never enter this scene's dynamic selection pool.
+    let mut character_candidates = candidates.iter()
+        .filter(|model| is_character_lora(model))
+        .map(|model| {
+            let score = characters.iter()
+                .map(|character| character_lora_match_score(&character.name, model))
+                .max()
+                .unwrap_or(0);
+            (score, model)
+        })
+        .filter(|(score, _)| *score > 0)
+        .collect::<Vec<_>>();
+    character_candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
+    character_candidates.truncate(28);
+
+    if character_candidates.is_empty() {
+        emit_pipeline(
+            app,
+            "character_lora_catalog",
+            "completed",
+            format!(
+                "No compatible character-tagged LoRA matched {}; the scene will use its canonical character design without a character LoRA",
+                characters.iter().map(|character| character.name.as_str()).collect::<Vec<_>>().join(", ")
+            ),
+        );
+        emit_pipeline(app, "lora_selection", "completed", "Selected 0 dynamic character LoRAs");
+        return Ok(Vec::new());
+    }
+
+    let character_text = characters.iter()
         .map(|character| format!(
             "{} — appearance: {}; clothing: {}; role: {}; personality: {:?}",
             character.name, character.appearance, character.clothing, character.role, character.personality
         ))
         .collect::<Vec<_>>();
-    let character_query = format!("{} {}", character_text.join(" "), scene_query);
-
-    let mut character_candidates = candidates.iter()
-        .filter(|model| !looks_like_style_lora(&lora_candidate_text(model)))
-        .map(|model| (lexical_score(&character_query, &lora_candidate_text(model)), model))
+    let candidate_lines = character_candidates.iter()
+        .map(|(score, model)| format!(
+            "{}\nCANONICAL CHARACTER NAME MATCH SCORE: {}",
+            lora_candidate_text(model), score
+        ))
         .collect::<Vec<_>>();
-    character_candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
-    character_candidates.truncate(28);
 
-    let mut concept_candidates = candidates.iter()
-        .filter(|model| !looks_like_style_lora(&lora_candidate_text(model)))
-        .map(|model| {
-            let text = lora_candidate_text(model);
-            let bonus = if looks_like_concept_pose_lora(&text) { 5 } else { 0 };
-            (lexical_score(&format!("{} pose action concept", scene_query), &text) + bonus, model)
-        })
-        .collect::<Vec<_>>();
-    concept_candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
-    concept_candidates.truncate(22);
-
-    let mut candidate_lines = Vec::new();
-    candidate_lines.push("CHARACTER CANDIDATES:".to_string());
-    for (_, model) in character_candidates {
-        candidate_lines.push(lora_candidate_text(model));
-    }
-    candidate_lines.push("CONCEPT/POSE CANDIDATES:".to_string());
-    for (_, model) in concept_candidates {
-        candidate_lines.push(lora_candidate_text(model));
-    }
-
-    let scene_characters = if character_text.is_empty() {
-        "(no known character in this scene)".to_string()
-    } else {
-        character_text.join("
-")
-    };
+    emit_pipeline(
+        app,
+        "character_lora_catalog",
+        "completed",
+        format!("Found {} compatible character LoRA candidate(s) matching this scene", character_candidates.len()),
+    );
 
     let system = settings.lora_selector_system_prompt.as_str();
-    let schema = r#"{"selections":[{"id":"","role":"character|concept_pose","character":"","weight":0.75,"reason":""}]}"#;
+    let schema = r#"{"selections":[{"id":"","role":"character","character":"exact canonical character name","weight":0.85,"reason":"matching Registry name/tag/description"}]}"#;
     let user = format!(
-        "SCENE: {}
-ACTION: {}
-COMPOSITION: {}
-CHARACTERS IN SCENE:
-{}
-
-CANDIDATES:
-{}
-
-For each selected LoRA, the reason should reference the actual registry metadata that made it relevant, such as a tag or phrase from the short description.
-Do not claim capabilities that are not supported by the supplied metadata.
-
-Return:
-{}",
-        scene.description, scene.action, scene.composition, scene_characters,
-        candidate_lines.join("
-"), schema
+        "SCENE: {}\nACTION: {}\nCOMPOSITION: {}\n\nCANONICAL CHARACTERS IN THIS SCENE:\n{}\n\nMATCHED CHARACTER-ONLY REGISTRY CANDIDATES:\n{}\n\nChoose only a LoRA whose Registry metadata identifies the same character. Use only supplied candidate IDs and exact canonical character names. Select at most one LoRA per character, at most two total. Do not choose generic style, pose, concept, setting, or background LoRAs. If none is an unambiguous match, return an empty selections array. The reason must quote or name the relevant Registry metadata.\n\nReturn:\n{}",
+        scene.description,
+        scene.action,
+        scene.composition,
+        character_text.join("\n"),
+        candidate_lines.join("\n\n"),
+        schema
     );
     let raw = chat(app, settings, "lora_selector", system, &user).await?;
     let parsed: SceneLoraSelectorResponse = serde_json::from_str(clean_json(&raw))
         .map_err(|e| AppError::ModelResponse(format!("LoRA selector output was invalid: {}; raw output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
 
-    let candidate_map = candidates.iter().map(|m| (m.id.clone(), m)).collect::<HashMap<_, _>>();
-    let allowed_characters = story.bible.characters.iter()
-        .filter(|character| {
-            scene.characters.iter().any(|name| {
-                normalize_name(name) == normalize_name(&character.name) || name.trim() == character.id
-            })
-        })
-        .take(2)
+    let candidate_map = character_candidates.iter()
+        .map(|(_, model)| (model.id.clone(), *model))
+        .collect::<HashMap<_, _>>();
+    let allowed_characters = characters.iter()
         .map(|character| (character.id.clone(), normalize_name(&character.name), character.name.clone()))
         .collect::<Vec<_>>();
 
     let mut result = Vec::new();
-    let mut used = std::collections::HashSet::new();
+    let mut used_models = std::collections::HashSet::new();
     let mut used_characters = std::collections::HashSet::new();
-    let mut character_count = 0usize;
-    let mut concept_count = 0usize;
 
+    // First honor the LLM's ranked choice, but validate every ID, character
+    // assignment and name/metadata match before a model can reach ComfyUI.
     for draft in parsed.selections {
         let Some(model) = candidate_map.get(&draft.id) else {
-            return Err(AppError::ModelResponse(format!("LoRA selector returned unknown model ID '{}'", draft.id)));
+            continue;
         };
-        if !used.insert(model.id.clone()) {
+        if draft.role.trim().to_ascii_lowercase() != "character" {
             continue;
         }
-        let role = draft.role.trim().to_lowercase();
-        if role != "character" && role != "concept_pose" {
+        let Some(requested_character) = draft.character.as_deref().map(str::trim).filter(|value| !value.is_empty()) else {
             continue;
-        }
-        let canonical_character = if role == "character" {
-            let Some(requested_character) = draft.character.as_deref().map(str::trim).filter(|value| !value.is_empty()) else {
-                continue;
-            };
-            let Some((_character_id, character_key, character_name)) = allowed_characters.iter().find(|entry| {
-                requested_character == entry.0.as_str()
-                    || normalize_name(requested_character) == entry.1
-            }) else {
-                continue;
-            };
-            if !used_characters.insert(character_key.clone()) {
-                continue;
-            }
-            character_count += 1;
-            Some(character_name.clone())
-        } else {
-            if !can_select_concept_pose(concept_count) {
-                continue;
-            }
-            concept_count += 1;
-            None
         };
-
-        if role == "character" && character_count > scene.characters.len().min(2) {
+        let Some((_character_id, character_key, character_name)) = allowed_characters.iter().find(|entry| {
+            requested_character == entry.0.as_str()
+                || normalize_name(requested_character) == entry.1
+        }) else {
+            continue;
+        };
+        if character_lora_match_score(character_name, model) <= 0
+            || !used_models.insert(model.id.clone())
+            || !used_characters.insert(character_key.clone())
+        {
             continue;
         }
 
         let artifact = registry.model_artifact(&model.id).await?;
-        let weight = if role == "character" {
-            draft.weight.clamp(0.55, 1.0)
-        } else {
-            draft.weight.clamp(0.25, 0.85)
-        };
-
         result.push(SceneLoraSelection {
             id: model.id.clone(),
             name: model.name.clone(),
-            role,
-            character: canonical_character,
-            weight,
+            role: "character".into(),
+            character: Some(character_name.clone()),
+            weight: draft.weight.clamp(0.55, 1.0),
             file_name: artifact.file_name,
             version_id: artifact.version_id.clone(),
             file_id: Some(artifact.file_id.clone()),
             sha256: artifact.sha256.clone(),
             activation_prompts: artifact.activation_prompts,
-            reason: draft.reason.trim().to_string(),
+            reason: if draft.reason.trim().is_empty() {
+                "Matched Registry character metadata to the canonical character name".into()
+            } else {
+                draft.reason.trim().to_string()
+            },
         });
     }
 
-    emit_pipeline(app, "lora_selection", "completed", format!("Selected {} dynamic LoRA(s)", result.len()));
+    // Deterministic fallback: use the strongest name/tag/description match for
+    // any scene character the small selector model omitted. Never guess when
+    // the Registry has no character-specific match.
+    for (_character_id, character_key, character_name) in &allowed_characters {
+        if used_characters.contains(character_key) {
+            continue;
+        }
+        let best = character_candidates.iter()
+            .filter(|(_, model)| !used_models.contains(&model.id))
+            .filter_map(|(_, model)| {
+                let score = character_lora_match_score(character_name, model);
+                (score > 0).then_some((score, *model))
+            })
+            .max_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.name.cmp(&a.1.name)));
+        let Some((_score, model)) = best else {
+            continue;
+        };
+        let artifact = registry.model_artifact(&model.id).await?;
+        result.push(SceneLoraSelection {
+            id: model.id.clone(),
+            name: model.name.clone(),
+            role: "character".into(),
+            character: Some(character_name.clone()),
+            weight: 0.85,
+            file_name: artifact.file_name,
+            version_id: artifact.version_id.clone(),
+            file_id: Some(artifact.file_id.clone()),
+            sha256: artifact.sha256.clone(),
+            activation_prompts: artifact.activation_prompts,
+            reason: "Deterministic Registry name/tag/description match to canonical character".into(),
+        });
+        used_models.insert(model.id.clone());
+        used_characters.insert(character_key.clone());
+    }
+
+    emit_pipeline(app, "lora_selection", "completed", format!("Selected {} dynamic character LoRA(s)", result.len()));
     Ok(result)
 }
-
 #[tauri::command]
 fn build_comfyui_workflow(
     workflow: Value,
@@ -3381,9 +3406,27 @@ mod tests {
     }
 
     #[test]
-    fn concept_pose_selection_allows_one_and_rejects_additional_choices() {
-        assert!(can_select_concept_pose(0));
-        assert!(!can_select_concept_pose(1));
+    fn character_lora_filter_requires_registry_character_tag() {
+        let character = registry::RegistryLoraCandidate {
+            id: "lora_naruto".into(),
+            name: "Naruto Uzumaki".into(),
+            model_type: "lora".into(),
+            description: Some("Naruto character identity".into()),
+            base_model: Some("SDXL".into()),
+            tags: vec!["character".into(), "anime".into()],
+        };
+        let style = registry::RegistryLoraCandidate {
+            id: "lora_anime_style".into(),
+            name: "Anime Style".into(),
+            model_type: "lora".into(),
+            description: Some("General anime rendering style".into()),
+            base_model: Some("SDXL".into()),
+            tags: vec!["style".into(), "anime".into()],
+        };
+        assert!(is_character_lora(&character));
+        assert!(!is_character_lora(&style));
+        assert!(character_lora_match_score("Naruto Uzumaki", &character) >= 2);
+        assert_eq!(character_lora_match_score("Sasuke Uchiha", &character), 0);
     }
 
     #[test]
