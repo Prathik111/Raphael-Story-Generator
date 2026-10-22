@@ -49,6 +49,8 @@ pub struct RegistryModelArtifact {
     pub version_id: Option<String>,
     pub file_id: String,
     pub file_name: String,
+    pub path: String,
+    pub relative_path: Option<String>,
     pub sha256: Option<String>,
     pub activation_prompts: Vec<String>,
 }
@@ -448,6 +450,8 @@ impl RegistryState {
             version_id: latest_version.as_ref().map(|version| version.id.clone()),
             file_id: file.id,
             file_name: file.filename,
+            path: file.path,
+            relative_path: file.relative_path,
             sha256: file.sha256,
             activation_prompts,
         })
