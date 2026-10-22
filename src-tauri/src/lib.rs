@@ -2393,7 +2393,6 @@ Return:
     write_story(&store, story)?;
     Ok(SceneExtractionResult { chapter_number, scenes })
 }
-#[tauri::command]
 fn compose_positive_prompt(
     activation_prompts: &[String],
     canonical_character_visuals: &str,
@@ -2424,6 +2423,7 @@ fn compose_positive_prompt(
     unique_nonempty(parts).join(", ")
 }
 
+#[tauri::command]
 async fn build_scene_prompt(
     story_id: String,
     chapter_number: usize,
