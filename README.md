@@ -103,7 +103,7 @@ $env:RAPHAEL_REGISTRY_AUTH_TOKEN = "<strong-random-shared-token>"
 npm run tauri:dev
 ~~~
 
-When `RAPHAEL_REGISTRY_URL` is set, Story Generator treats the Registry as remote and will **not** try to start a second local Registry. The same environment variables apply to packaged builds. The Registry uses bearer-token authentication; plain HTTP LAN mode should only be used on a trusted network, or replaced with a TLS/reverse-proxy setup for an untrusted network.
+When `RAPHAEL_REGISTRY_URL` is set, Story Generator uses that existing Registry and will **not** start a second local instance, matching Raphael Image Generator behavior. The URL and `RAPHAEL_REGISTRY_AUTH_TOKEN` are honored by packaged builds too; `RAPHAEL_REGISTRY_TOKEN_FILE` can override the local token-file path. Without an explicit URL, the app probes `http://127.0.0.1:43217` and starts a local Registry when its executable is available. The Registry uses bearer-token authentication; plain HTTP LAN mode should only be used on a trusted network, or replaced with a TLS/reverse-proxy setup for an untrusted network.
 
 ## Prerequisites
 
@@ -134,7 +134,7 @@ npm run tauri:dev
 
 ## Notes
 
-Scene extraction and image prompt generation are implemented as independent stages so they can later connect to the Raphael Model Manager model/LoRA registry and ComfyUI workflow selector without changing story canon.
+Scene extraction and image prompt generation remain separate from story canon. Image prompts query the shared Raphael Model Registry for compatible character LoRAs and pass only validated, matching character assets into the ComfyUI workflow builder.
 
 
 ## ComfyUI workflow queue
@@ -172,9 +172,9 @@ Checkpoint
 
 Both MODEL and CLIP are chained through every LoRA. The final MODEL/CLIP outputs replace the original checkpoint MODEL/CLIP references in the workflow, so there is no fixed number of LoRA slots.
 
-The Story Generator supplies the stack in stable order: locked style LoRAs first, then selected character LoRAs, then the concept/pose LoRA. The selector chooses the LoRAs; the workflow builder only constructs the graph.
+The Story Generator supplies the stack in stable order: locked style LoRAs first, then scene-matched character LoRAs. Automatic selection is restricted to Registry entries tagged `character`, compatible with the selected checkpoint, and matched to a canonical scene character by Registry name, tags, or description. It does not automatically add generic style, concept, pose, setting, or background LoRAs. If no matching character LoRA exists, generation continues using the Story Bible's canonical appearance and clothing lock without a character LoRA. The selector chooses the LoRAs; the workflow builder only constructs the graph.
 
-Automatic model/LoRA discovery from the Raphael Model Manager is handled through the shared Raphael Model Registry.
+Automatic model discovery is handled through the shared Raphael Model Registry, the same metadata source used by Raphael Image Generator. When web research is enabled and the story prompt names an external character or series, the private research stage runs before Story Architect; per-scene character LoRA discovery runs when scene prompts are built.
 
 
 ## Local settings and secrets
