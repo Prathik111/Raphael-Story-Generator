@@ -314,3 +314,10 @@ export interface OllamaLanHostStatus {
   models: string[];
   detail: string | null;
 }
+
+export interface WebHostStatus {
+  running: boolean;
+  port: number;
+  lan_url: string | null;
+  detail: string | null;
+}
