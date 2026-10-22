@@ -90,8 +90,8 @@ Rules for the positive prompt:
 - Favor concrete visual language and concise comma-separated prompt phrases. Do not write a story, explanation, or prose paragraph.
 - Do not invent unsupported character traits, costumes, props, locations, or LoRA capabilities.
 - Do not output LoRA filenames, model IDs, registry IDs, or internal metadata unless they are themselves part of an activation prompt.
-- Choose exactly one approved image size based on the scene composition: square for balanced compositions, landscape for wide environmental/action scenes, portrait for character-focused/tall compositions.
-- Return image_width and image_height as numeric values. Use only these approved pairs: 512x512, 768x768, 1024x1024, 1216x832, 832x1216, 1344x768, 768x1344, 1536x864, 864x1536.
+- Never choose or change output dimensions. The user's fixed image size is supplied separately and applied uniformly by the application.
+- Return only positive_prompt and negative_prompt; image dimensions are application settings, not model-generated output.
 
 Rules for the negative prompt:
 - Describe unwanted visual results that should be suppressed: identity drift, incorrect appearance/clothing, extra or missing limbs, malformed hands/fingers, anatomy errors, duplicate subjects, bad proportions, deformed faces, blur, low detail, noise, compression artifacts, text, watermark, logo, signature, UI elements, cropped subjects, and scene contradictions.
@@ -104,7 +104,8 @@ Output rules:
 - Do not wrap the JSON in Markdown fences.
 - Do not add commentary before or after the JSON."#;
 
-fn default_image_dimension() -> u32 { 1024 }
+fn default_image_width() -> u32 { 1920 }
+fn default_image_height() -> u32 { 1080 }
 
 fn default_web_research_enabled() -> bool { true }
 fn default_web_search_url() -> String { "http://127.0.0.1:8080".into() }
@@ -128,6 +129,10 @@ pub struct AppSettings {
     pub scene_director_system_prompt: String,
     pub lora_selector_system_prompt: String,
     pub image_prompt_generator_system_prompt: String,
+    #[serde(default = "default_image_width")]
+    pub image_width: u32,
+    #[serde(default = "default_image_height")]
+    pub image_height: u32,
     #[serde(default = "default_web_research_enabled")]
     pub web_research_enabled: bool,
     #[serde(default = "default_web_search_url")]
@@ -157,6 +162,8 @@ impl Default for AppSettings {
             scene_director_system_prompt: DEFAULT_SCENE_DIRECTOR_SYSTEM_PROMPT.into(),
             lora_selector_system_prompt: DEFAULT_LORA_SELECTOR_SYSTEM_PROMPT.into(),
             image_prompt_generator_system_prompt: DEFAULT_IMAGE_PROMPT_SYSTEM_PROMPT.into(),
+            image_width: default_image_width(),
+            image_height: default_image_height(),
             web_research_enabled: true,
             web_search_url: default_web_search_url(),
             web_proxy_url: default_web_proxy_url(),
@@ -298,9 +305,9 @@ pub struct Scene {
     pub image_mime: Option<String>,
     #[serde(default)]
     pub image_error: Option<String>,
-    #[serde(default = "default_image_dimension")]
+    #[serde(default = "default_image_width")]
     pub image_width: u32,
-    #[serde(default = "default_image_dimension")]
+    #[serde(default = "default_image_height")]
     pub image_height: u32,
     pub comfy_prompt_id: Option<String>,
 }
@@ -716,25 +723,17 @@ fn parse_scene_response(raw: &str) -> Result<SceneResponse, String> {
 struct ImagePromptResponse {
     positive_prompt: String,
     negative_prompt: String,
-    image_width: u32,
-    image_height: u32,
 }
 
-fn normalize_image_size(width: u32, height: u32) -> AppResult<(u32, u32)> {
-    const ALLOWED: &[(u32, u32)] = &[
-        (512, 512), (768, 768), (1024, 1024),
-        (1216, 832), (832, 1216), (1344, 768), (768, 1344),
-        (1536, 864), (864, 1536),
-    ];
-    if ALLOWED.contains(&(width, height)) {
-        Ok((width, height))
-    } else {
-        Err(AppError::ModelResponse(format!(
-            "LLM selected unsupported image size {}x{}; allowed sizes: {}",
-            width, height,
-            ALLOWED.iter().map(|(w, h)| format!("{}x{}", w, h)).collect::<Vec<_>>().join(", "),
-        )))
+fn validate_image_size(width: u32, height: u32) -> AppResult<(u32, u32)> {
+    for (label, value) in [("width", width), ("height", height)] {
+        if !(512..=4096).contains(&value) || value % 8 != 0 {
+            return Err(AppError::ComfyUi(format!(
+                "image {label} must be between 512 and 4096 and divisible by 8; received {value}"
+            )));
+        }
     }
+    Ok((width, height))
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -1725,6 +1724,7 @@ fn validate_settings(settings: &AppSettings) -> AppResult<()> {
     if !settings.temperature.is_finite() || !(0.0..=2.0).contains(&settings.temperature) {
         return Err(AppError::Llm("temperature must be between 0 and 2".into()));
     }
+    validate_image_size(settings.image_width, settings.image_height)?;
     if settings.web_search_max_results == 0 || settings.web_search_max_results > 12 {
         return Err(AppError::WebResearch("web search results must be between 1 and 12".into()));
     }
@@ -2423,6 +2423,7 @@ pub struct SceneExtractionResult { pub chapter_number: usize, pub scenes: Vec<Sc
 async fn extract_scenes(story_id: String, chapter_number: usize, store: State<'_, Store>) -> AppResult<SceneExtractionResult> {
     let mut story = require_story(&store, &story_id)?;
     let settings = store.settings.read().map_err(|e| AppError::Storage(e.to_string()))?.clone();
+    let (image_width, image_height) = validate_image_size(settings.image_width, settings.image_height)?;
     let chapter_index = story.chapters.iter().position(|c| c.number == chapter_number).ok_or_else(|| AppError::ModelResponse("chapter not found".into()))?;
     let chapter = story.chapters[chapter_index].clone();
     let visual_characters = story.bible.characters.iter().map(|c| format!("{} [{}] — appearance: {}; clothing: {}; personality: {:?}", c.id, c.name, c.appearance, c.clothing, c.personality)).collect::<Vec<_>>().join("
@@ -2462,7 +2463,7 @@ Return:
         id: format!("{}-scene-{:03}", chapter.number, index + 1), order: index + 1, description: scene.description,
         location: scene.location, time: scene.time, characters: scene.characters, action: scene.action,
         composition: scene.composition, dialogue: scene.dialogue, positive_prompt: String::new(),
-        negative_prompt: String::new(), selected_loras: Vec::new(), image_status: "not_ready".into(), image_url: None, image_path: None, image_mime: None, image_error: None, image_width: 1024, image_height: 1024, comfy_prompt_id: None,
+        negative_prompt: String::new(), selected_loras: Vec::new(), image_status: "not_ready".into(), image_url: None, image_path: None, image_mime: None, image_error: None, image_width, image_height, comfy_prompt_id: None,
     }).collect::<Vec<_>>();
     story = require_story(&store, &story_id)?;
     let chapter_index = story.chapters.iter().position(|c| c.number == chapter_number).ok_or_else(|| AppError::ModelResponse("chapter disappeared while saving extracted scenes".into()))?;
@@ -2511,6 +2512,7 @@ async fn build_scene_prompt(
 ) -> AppResult<Story> {
     let mut story = require_story(&store, &story_id)?;
     let settings = store.settings.read().map_err(|e| AppError::Storage(e.to_string()))?.clone();
+    let (image_width, image_height) = validate_image_size(settings.image_width, settings.image_height)?;
     let chapter = story.chapters.iter().find(|c| c.number == chapter_number).ok_or_else(|| AppError::ModelResponse("chapter not found".into()))?;
     let scene = chapter.scenes.iter().find(|s| s.id == scene_id).ok_or_else(|| AppError::ModelResponse("scene not found".into()))?;
     let matched_ids = story.bible.characters.iter()
@@ -2575,8 +2577,10 @@ async fn build_scene_prompt(
     };
 
     let system = settings.image_prompt_generator_system_prompt.as_str();
-    let schema = r#"{"positive_prompt":"","negative_prompt":"","image_width":1024,"image_height":1024}"#;
+    let schema = r#"{"positive_prompt":"","negative_prompt":""}"#;
     let user = format!("STORY: {}
+FIXED IMAGE SIZE: {}x{}
+Use this exact resolution for this scene and every other scene. Do not choose, infer, or return another size; the application applies the configured dimensions deterministically.
 SCENE: {}
 LOCATION: {}
 TIME: {}
@@ -2605,6 +2609,8 @@ Generate the prompts now.
 Return:
 {}",
         story.title,
+        image_width,
+        image_height,
         scene.description,
         scene.location,
         scene.time,
@@ -2621,10 +2627,6 @@ Return:
     emit_pipeline(store.app(), "image_prompt_generator", "started", format!("Generating positive/negative prompts for {}", scene.id));
     let raw = chat(store.app(), &settings, "image_prompt_generator", system, &user).await?;
     let parsed: ImagePromptResponse = serde_json::from_str(clean_json(&raw)).map_err(|e| AppError::ModelResponse(format!("{}; raw model output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
-    let (image_width, image_height) = normalize_image_size(
-        if parsed.image_width == 0 { 1024 } else { parsed.image_width },
-        if parsed.image_height == 0 { 1024 } else { parsed.image_height },
-    )?;
     story = require_story(&store, &story_id)?;
     let chapter_mut = story.chapters.iter_mut().find(|c| c.number == chapter_number)
         .ok_or_else(|| AppError::ModelResponse("chapter disappeared while saving scene prompt".into()))?;
@@ -2875,8 +2877,7 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
         return Err(AppError::ComfyUi("build the scene prompt before queuing the image".into()));
     }
 
-    let image_width = scene.image_width;
-    let image_height = scene.image_height;
+    let (image_width, image_height) = validate_image_size(settings.image_width, settings.image_height)?;
     let positive_prompt = scene.positive_prompt.clone();
     let negative_prompt = scene.negative_prompt.clone();
     let seed = (Uuid::new_v4().as_u128() & u64::MAX as u128) as u64;
@@ -3005,6 +3006,8 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
         .ok_or_else(|| AppError::ComfyUi("scene disappeared while updating image status".into()))?;
     emit_pipeline(store.app(), "comfyui", "running", "ComfyUI accepted the workflow; monitoring generation");
     scene_mut.comfy_prompt_id = Some(prompt_id.clone());
+    scene_mut.image_width = image_width;
+    scene_mut.image_height = image_height;
     scene_mut.image_status = "queued".into();
     scene_mut.image_error = None;
     scene_mut.image_path = None;
@@ -3600,6 +3603,25 @@ mod tests {
         };
 
         assert!(validate_story_identity(&story).is_err());
+    }
+
+    #[test]
+    fn image_size_defaults_to_1920_by_1080_and_accepts_eight_pixel_steps() {
+        let settings = AppSettings::default();
+        assert_eq!(settings.image_width, 1920);
+        assert_eq!(settings.image_height, 1080);
+        assert_eq!(validate_image_size(1920, 1080).unwrap(), (1920, 1080));
+        // 864 caused the previous workflow validation error because it is not
+        // divisible by 64, though it is a valid multiple of 8 for the latent size.
+        assert_eq!(validate_image_size(864, 1536).unwrap(), (864, 1536));
+    }
+
+    #[test]
+    fn image_size_rejects_invalid_latent_dimensions() {
+        assert!(validate_image_size(1919, 1080).is_err());
+        assert!(validate_image_size(1920, 1079).is_err());
+        assert!(validate_image_size(256, 1080).is_err());
+        assert!(validate_image_size(1920, 5000).is_err());
     }
 
     #[test]
