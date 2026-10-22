@@ -850,13 +850,13 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
     setBaseUrlModelsBusy(true);
     setBaseUrlModelsMessage(null);
     try {
-      const configuredBase = draft.llm_base_url.trim().replace(/\\/+$/, '');
+      const configuredBase = draft.llm_base_url.trim().replace(/\/+$/, '');
       if (!configuredBase) throw new Error('Enter the Raphael/OpenAI-compatible Base URL first.');
       const base = new URL(configuredBase);
       if (base.protocol !== 'http:' && base.protocol !== 'https:') {
         throw new Error('The Base URL must use HTTP or HTTPS.');
       }
-      const path = base.pathname.replace(/\\/+$/, '');
+      const path = base.pathname.replace(/\/+$/, '');
       base.pathname = path.toLowerCase().endsWith('/v1') ? `${path}/models` : `${path}/v1/models`;
       base.search = '';
       base.hash = '';
