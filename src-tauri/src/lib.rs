@@ -2864,6 +2864,88 @@ fn build_comfyui_workflow(
     })
 }
 
+fn format_comfyui_rejection(status: reqwest::StatusCode, body: &str) -> String {
+    let value: Value = match serde_json::from_str(body) {
+        Ok(value) => value,
+        Err(_) => {
+            let detail = body.trim();
+            if detail.is_empty() {
+                return format!("HTTP {}: ComfyUI returned an empty error response", status.as_u16());
+            }
+            let detail = detail.chars().take(1200).collect::<String>();
+            return format!("HTTP {}: {}", status.as_u16(), detail);
+        }
+    };
+
+    let mut parts = Vec::<String>::new();
+    if let Some(error) = value.get("error") {
+        if let Some(message) = error.as_str().filter(|message| !message.trim().is_empty()) {
+            parts.push(message.to_string());
+        } else if error.is_object() {
+            let kind = error.get("type").and_then(Value::as_str).filter(|v| !v.trim().is_empty());
+            let message = error.get("message").and_then(Value::as_str).filter(|v| !v.trim().is_empty());
+            let details = error.get("details").and_then(Value::as_str).filter(|v| !v.trim().is_empty());
+            if let Some(message) = message {
+                if let Some(kind) = kind {
+                    parts.push(format!("{message} (type: {kind})"));
+                } else {
+                    parts.push(message.to_string());
+                }
+            } else if let Some(kind) = kind {
+                parts.push(format!("ComfyUI validation error (type: {kind})"));
+            }
+            if let Some(details) = details {
+                if Some(details) != message {
+                    parts.push(format!("Details: {details}"));
+                }
+            }
+        }
+    }
+
+    if let Some(detail) = value.get("detail") {
+        if let Some(detail) = detail.as_str().filter(|v| !v.trim().is_empty()) {
+            parts.push(detail.to_string());
+        }
+    }
+
+    if let Some(node_errors) = value.get("node_errors").and_then(Value::as_object) {
+        for (node_id, node_error) in node_errors.iter().take(8) {
+            let class_type = node_error.get("class_type").and_then(Value::as_str).unwrap_or("unknown node");
+            let messages = node_error
+                .get("errors")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .take(3)
+                .filter_map(|error| {
+                    error.get("message").and_then(Value::as_str)
+                        .or_else(|| error.get("details").and_then(Value::as_str))
+                        .filter(|message| !message.trim().is_empty())
+                        .map(str::to_string)
+                })
+                .collect::<Vec<_>>();
+            if !messages.is_empty() {
+                parts.push(format!("Node {node_id} ({class_type}): {}", messages.join("; ")));
+            }
+        }
+        let total = node_errors.len();
+        if total > 8 {
+            parts.push(format!("Additional validation errors in {} more node(s)", total - 8));
+        }
+    }
+
+    if parts.is_empty() {
+        let detail = body.trim().chars().take(1200).collect::<String>();
+        if detail.is_empty() {
+            return format!("HTTP {}: ComfyUI returned no error details", status.as_u16());
+        }
+        parts.push(detail);
+    }
+
+    let message = format!("HTTP {}: {}", status.as_u16(), parts.join(" | "));
+    message.chars().take(3000).collect()
+}
+
 #[tauri::command]
 async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: String, store: State<'_, Store>) -> AppResult<Story> {
     let mut story = require_story(&store, &story_id)?;
@@ -2994,9 +3076,9 @@ async fn queue_scene_image(story_id: String, chapter_number: usize, scene_id: St
     let body = response.text().await.map_err(|e| AppError::ComfyUi(e.to_string()))?;
     let value: Value = serde_json::from_str(&body).unwrap_or_else(|_| json!({ "error": body }));
     if !status.is_success() {
-        return Err(AppError::ComfyUi(
-            value.get("error").and_then(Value::as_str).unwrap_or("ComfyUI rejected the workflow").to_string()
-        ));
+        let message = format_comfyui_rejection(status, &body);
+        emit_pipeline(store.app(), "comfyui", "failed", message.clone());
+        return Err(AppError::ComfyUi(message));
     }
     let prompt_id = value.get("prompt_id").and_then(Value::as_str).unwrap_or(&requested_prompt_id).to_string();
     story = require_story(&store, &story_id)?;
@@ -3603,6 +3685,42 @@ mod tests {
         };
 
         assert!(validate_story_identity(&story).is_err());
+    }
+
+    #[test]
+    fn comfyui_validation_errors_include_status_node_and_input_message() {
+        let body = json!({
+            "error": {
+                "type": "prompt_outputs_failed_validation",
+                "message": "Prompt outputs failed validation",
+                "details": ""
+            },
+            "node_errors": {
+                "8": {
+                    "class_type": "EmptyLatentImage",
+                    "errors": [{
+                        "type": "value_not_in_list",
+                        "message": "Value not in list: width must be divisible by 64"
+                    }]
+                }
+            }
+        }).to_string();
+
+        let message = format_comfyui_rejection(reqwest::StatusCode::BAD_REQUEST, &body);
+        assert!(message.contains("HTTP 400"));
+        assert!(message.contains("Prompt outputs failed validation"));
+        assert!(message.contains("Node 8 (EmptyLatentImage)"));
+        assert!(message.contains("width must be divisible by 64"));
+    }
+
+    #[test]
+    fn comfyui_rejection_preserves_plain_text_server_errors() {
+        let message = format_comfyui_rejection(
+            reqwest::StatusCode::BAD_REQUEST,
+            "Invalid workflow JSON"
+        );
+        assert!(message.contains("HTTP 400"));
+        assert!(message.contains("Invalid workflow JSON"));
     }
 
     #[test]
