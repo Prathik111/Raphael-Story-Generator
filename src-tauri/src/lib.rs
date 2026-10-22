@@ -644,13 +644,13 @@ fn normalize_scene_response_json(value: &mut Value) {
     let Some(root) = value.as_object_mut() else { return };
     let Some(scenes_value) = root.get_mut("scenes") else { return };
 
-    if let Value::Object(_) = scenes_value {
-        *scenes_value = Value::Array(vec![scenes_value.clone()]);
-    } else if let Value::Null = scenes_value {
-        *scenes_value = Value::Array(Vec::new());
-    } else if !scenes_value.is_array() {
-        *scenes_value = Value::Array(vec![scenes_value.clone()]);
-    }
+    let original_scenes = std::mem::replace(scenes_value, Value::Null);
+    *scenes_value = match original_scenes {
+        Value::Array(items) => Value::Array(items),
+        Value::Object(_) => Value::Array(vec![original_scenes]),
+        Value::Null => Value::Array(Vec::new()),
+        other => Value::Array(vec![other]),
+    };
 
     let Some(scenes) = scenes_value.as_array_mut() else { return };
     for scene in scenes {
@@ -664,27 +664,27 @@ fn normalize_scene_response_json(value: &mut Value) {
             }
         }
 
-        match fields.get_mut("characters") {
-            Some(Value::Array(names)) => {
-                for name in names.iter_mut() {
-                    *name = Value::String(scene_character_as_string(name));
-                }
+        let character_value = fields.remove("characters");
+        let names = match character_value {
+            Some(Value::Array(items)) => items
+                .iter()
+                .map(scene_character_as_string)
+                .map(Value::String)
+                .collect(),
+            Some(Value::Null) | None => Vec::new(),
+            Some(Value::Object(map))
+                if map.contains_key("name")
+                    || map.contains_key("character")
+                    || map.contains_key("character_name")
+                    || map.contains_key("id") =>
+            {
+                vec![Value::String(scene_character_as_string(&Value::Object(map)))]
             }
-            Some(Value::Null) | None => {
-                fields.insert("characters".into(), Value::Array(Vec::new()));
-            }
-            Some(value) => {
-                let names = match value {
-                    Value::Object(map) if map.contains_key("name") || map.contains_key("character") || map.contains_key("character_name") || map.contains_key("id") => {
-                        vec![Value::String(scene_character_as_string(value))]
-                    }
-                    Value::Object(map) => map.keys().map(|name| Value::String(name.clone())).collect(),
-                    Value::String(text) if text.trim().is_empty() => Vec::new(),
-                    other => vec![Value::String(scene_character_as_string(other))],
-                };
-                fields.insert("characters".into(), Value::Array(names));
-            }
-        }
+            Some(Value::Object(map)) => map.keys().map(|name| Value::String(name.clone())).collect(),
+            Some(Value::String(text)) if text.trim().is_empty() => Vec::new(),
+            Some(other) => vec![Value::String(scene_character_as_string(&other))],
+        };
+        fields.insert("characters".into(), Value::Array(names));
     }
 }
 
