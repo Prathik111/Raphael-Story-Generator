@@ -914,7 +914,7 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
       <div className="section-head setting-gap">OLLAMA AUTO-DETECTION</div>
       <small className="settings-hint">Loads the models installed on the computer running Raphael. When you open Raphael from another device on the LAN, this dropdown still lists the host's models. Ollama stays on the host; only the Raphael web app is shared.</small>
       <div className="ollama-action-row">
-        <button type="button" className="secondary-btn" onClick={() => void detectOllamaModels()} disabled={ollamaDetecting || ollamaHostBusy}>{ollamaDetecting ? 'LOADING…' : 'LOAD HOST MODELS'}</button>
+        <button type="button" className="secondary-btn" onClick={() => void detectOllamaModels()} disabled={ollamaDetecting}>{ollamaDetecting ? 'LOADING…' : 'LOAD HOST MODELS'}</button>
         {ollamaModels.length ? <span className="tiny">{ollamaModels.length} MODEL(S)</span> : null}
       </div>
       {ollamaModels.length ? <label>Detected model<select value={draft.llm_model} onChange={e => setDraft({ ...draft, llm_model: e.target.value })}>{ollamaModels.map(model => <option value={model} key={model}>{model}</option>)}</select></label> : null}
