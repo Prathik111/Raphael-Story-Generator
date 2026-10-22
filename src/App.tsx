@@ -903,6 +903,12 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
     }
   };
 
+  useEffect(() => {
+    // A browser client is already talking to the host-side API; populate the
+    // model selector from that PC's local Ollama as soon as Settings opens.
+    if (api.isWebApp) void detectOllamaModels();
+  }, []);
+
   return <div className="settings-backdrop" onMouseDown={onClose}><section className="settings-panel hud-panel" onMouseDown={e => e.stopPropagation()}>
     <header className="settings-header"><div><div className="eyebrow">RAPHAEL CORE</div><h2>ENGINE SETTINGS</h2></div><button className="settings-close" onClick={onClose}>×</button></header>
     <div className="settings-scroll">
@@ -917,7 +923,7 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
         <button type="button" className="secondary-btn" onClick={() => void detectOllamaModels()} disabled={ollamaDetecting}>{ollamaDetecting ? 'LOADING…' : 'LOAD HOST MODELS'}</button>
         {ollamaModels.length ? <span className="tiny">{ollamaModels.length} MODEL(S)</span> : null}
       </div>
-      {ollamaModels.length ? <label>Detected model<select value={draft.llm_model} onChange={e => setDraft({ ...draft, llm_model: e.target.value })}>{ollamaModels.map(model => <option value={model} key={model}>{model}</option>)}</select></label> : null}
+      {ollamaModels.length ? <label>Host model<select value={draft.llm_model} onChange={e => setDraft({ ...draft, llm_model: e.target.value })}>{ollamaModels.map(model => <option value={model} key={model}>{model}</option>)}</select></label> : null}
       {ollamaDetectionResult ? <div className={ollamaDetectionResult.startsWith('Loaded ') ? 'ollama-inline-result' : 'error-box'}>{ollamaDetectionResult}</div> : null}
 
       <label>Temperature<input type="number" min="0" max="2" step="0.1" value={draft.temperature} onChange={e => setDraft({ ...draft, temperature: Number(e.target.value) || 0 })}/></label>
