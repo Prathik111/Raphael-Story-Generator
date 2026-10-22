@@ -38,6 +38,131 @@ pub struct WorkflowBuildResult {
     pub checkpoint_node: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct RaphaelWorkflowRequest {
+    pub checkpoint_name: String,
+    pub use_unet_loader: bool,
+    pub positive_prompt: String,
+    pub negative_prompt: String,
+    pub seed: u64,
+    pub image_width: u32,
+    pub image_height: u32,
+    pub lora_stack: Vec<WorkflowLoraInput>,
+}
+
+/// Built-in ComfyUI graph mirrored from Raphael Image Generator.
+/// An explicit user-supplied API workflow still takes precedence in the app.
+pub fn build_raphael_workflow(request: RaphaelWorkflowRequest) -> AppResult<WorkflowBuildResult> {
+    validate_image_dimension(request.image_width, "width")?;
+    validate_image_dimension(request.image_height, "height")?;
+    if request.checkpoint_name.trim().is_empty() {
+        return Err(AppError::ComfyUi("the selected Registry checkpoint has no ComfyUI model path".into()));
+    }
+
+    let base_loader = if request.use_unet_loader {
+        json!({
+            "class_type": "UNETLoader",
+            "inputs": {
+                "unet_name": request.checkpoint_name,
+                "weight_dtype": "default"
+            }
+        })
+    } else {
+        json!({
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": { "ckpt_name": request.checkpoint_name }
+        })
+    };
+
+    let mut nodes = Map::<String, Value>::new();
+    nodes.insert("13".into(), base_loader);
+    // Keep the exact external encoder and VAE nodes used by Raphael Image Generator.
+    nodes.insert("4".into(), json!({
+        "class_type": "CLIPLoader",
+        "inputs": {
+            "clip_name": "anima\\\\oneObsession_anima29BV1_txt.safetensors",
+            "type": "stable_diffusion",
+            "device": "default"
+        }
+    }));
+    nodes.insert("9".into(), json!({
+        "class_type": "VAELoader",
+        "inputs": { "vae_name": "anima\\\\qwen_image_vae.safetensors" }
+    }));
+    nodes.insert("5".into(), json!({
+        "class_type": "CLIPTextEncode",
+        "inputs": { "clip": ["4", 0], "text": request.positive_prompt }
+    }));
+    nodes.insert("6".into(), json!({
+        "class_type": "CLIPTextEncode",
+        "inputs": { "clip": ["4", 0], "text": request.negative_prompt }
+    }));
+    nodes.insert("8".into(), json!({
+        "class_type": "EmptyLatentImage",
+        "inputs": {
+            "width": request.image_width,
+            "height": request.image_height,
+            "batch_size": 1
+        }
+    }));
+
+    let mut seen_files = HashSet::new();
+    let mut lora_node_ids = Vec::new();
+    let mut last_model = "13".to_string();
+    let mut next_id = 14_u64;
+    for lora in request.lora_stack {
+        let file_name = lora.file_name.trim().to_string();
+        if file_name.is_empty() {
+            return Err(AppError::ComfyUi("built-in workflow received an empty LoRA file name".into()));
+        }
+        if !seen_files.insert(file_name.clone()) {
+            continue;
+        }
+        let node_id = next_id.to_string();
+        nodes.insert(node_id.clone(), json!({
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "model": [last_model, 0],
+                "lora_name": file_name,
+                "strength_model": lora.weight
+            }
+        }));
+        last_model = node_id.clone();
+        lora_node_ids.push(node_id);
+        next_id += 1;
+    }
+
+    nodes.insert("7".into(), json!({
+        "class_type": "KSampler",
+        "inputs": {
+            "model": [last_model, 0],
+            "positive": ["5", 0],
+            "negative": ["6", 0],
+            "latent_image": ["8", 0],
+            "seed": request.seed,
+            "steps": 28,
+            "cfg": 6.5,
+            "sampler_name": "euler",
+            "scheduler": "normal",
+            "denoise": 1.0
+        }
+    }));
+    nodes.insert("10".into(), json!({
+        "class_type": "VAEDecode",
+        "inputs": { "samples": ["7", 0], "vae": ["9", 0] }
+    }));
+    nodes.insert("12".into(), json!({
+        "class_type": "SaveImage",
+        "inputs": { "images": ["10", 0], "filename_prefix": "Raphael" }
+    }));
+
+    Ok(WorkflowBuildResult {
+        workflow: Value::Object(nodes),
+        lora_node_ids,
+        checkpoint_node: "13".into(),
+    })
+}
+
 fn validate_image_dimension(value: u32, label: &str) -> AppResult<()> {
     if !(512..=2048).contains(&value) || value % 64 != 0 {
         return Err(AppError::ComfyUi(format!("image {label} must be between 512 and 2048 and divisible by 64; received {value}")));
@@ -296,6 +421,52 @@ mod tests {
                 }
             }
         })
+    }
+
+    #[test]
+    fn built_in_raphael_workflow_uses_checkpoint_and_model_only_loras() {
+        let result = build_raphael_workflow(RaphaelWorkflowRequest {
+            checkpoint_name: "anima\\\\miaomiaoRealskin_anima13.safetensors".into(),
+            use_unet_loader: true,
+            positive_prompt: "aetheria_trigger, a hero at dusk".into(),
+            negative_prompt: "blurry".into(),
+            seed: 123,
+            image_width: 1024,
+            image_height: 1024,
+            lora_stack: vec![
+                WorkflowLoraInput { file_name: "Anima\\\\Aetheria.safetensors".into(), weight: 0.85, clip_weight: None },
+            ],
+        }).unwrap();
+
+        let workflow = result.workflow.as_object().unwrap();
+        assert_eq!(workflow["13"]["class_type"], "UNETLoader");
+        assert_eq!(workflow["13"]["inputs"]["unet_name"], "anima\\\\miaomiaoRealskin_anima13.safetensors");
+        assert_eq!(workflow["4"]["class_type"], "CLIPLoader");
+        assert_eq!(workflow["9"]["class_type"], "VAELoader");
+        assert_eq!(workflow["5"]["inputs"]["text"], "aetheria_trigger, a hero at dusk");
+        assert_eq!(workflow["14"]["class_type"], "LoraLoaderModelOnly");
+        assert_eq!(workflow["14"]["inputs"]["model"], json!(["13", 0]));
+        assert_eq!(workflow["7"]["inputs"]["model"], json!(["14", 0]));
+        assert_eq!(workflow["7"]["inputs"]["seed"], 123);
+        assert_eq!(workflow["8"]["inputs"]["width"], 1024);
+        assert_eq!(result.lora_node_ids, vec!["14"]);
+    }
+
+    #[test]
+    fn built_in_raphael_workflow_uses_full_checkpoint_loader_when_needed() {
+        let result = build_raphael_workflow(RaphaelWorkflowRequest {
+            checkpoint_name: "example.safetensors".into(),
+            use_unet_loader: false,
+            positive_prompt: "positive".into(),
+            negative_prompt: "negative".into(),
+            seed: 1,
+            image_width: 1024,
+            image_height: 1024,
+            lora_stack: Vec::new(),
+        }).unwrap();
+        assert_eq!(result.workflow["13"]["class_type"], "CheckpointLoaderSimple");
+        assert_eq!(result.workflow["7"]["inputs"]["model"], json!(["13", 0]));
+        assert_eq!(result.workflow["10"]["inputs"]["vae"], json!(["9", 0]));
     }
 
     #[test]
