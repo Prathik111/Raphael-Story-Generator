@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { AppSettings, AppState, ComfyGenerationEvent, LlmGenerationEvent, OllamaLanHostStatus, OllamaModelDetection, PipelineEvent, RegistryCatalog, RegistryStatusDto, SceneExtractionResult, ServiceStatusBoard, Story, StoryVisualSetup } from './types';
+import type { AppSettings, AppState, ComfyGenerationEvent, LlmGenerationEvent, OllamaModelDetection, PipelineEvent, RegistryCatalog, RegistryStatusDto, SceneExtractionResult, ServiceStatusBoard, Story, StoryVisualSetup, WebHostStatus } from './types';
 import type { WorkflowBuildResult, WorkflowLoraInput } from './types';
 
 export const isWebApp = typeof window !== 'undefined' && !(window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
