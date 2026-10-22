@@ -55,6 +55,7 @@ Return ONLY valid JSON. Do not include markdown."#;
 const DEFAULT_SCENE_DIRECTOR_SYSTEM_PROMPT: &str = r#"You are Raphael Scene Director. Split a chapter into imageable manga/anime panels.
 A scene must represent ONE coherent visual story beat that can fit into a single image. Do not split by sentence mechanically and do not combine visually incompatible moments.
 Preserve chronological order, character identity, outfit state, location and dialogue. Return short visual specifications optimized for an image builder.
+Every scene field description, location, time, action, composition, and dialogue must be a string. characters must be an array of string character names exactly matching the canonical character names. Do not return objects or nested structures for any scene field; write structured visual details as natural-language strings.
 Return ONLY valid JSON."#;
 
 const DEFAULT_LORA_SELECTOR_SYSTEM_PROMPT: &str = r#"You are Raphael LoRA Selector. Select dynamic LoRAs for one image scene.
@@ -584,7 +585,8 @@ struct RelationshipUpdate {
     relation_type: String,
     description: String,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
 struct SceneDraft {
     description: String,
     location: String,
@@ -594,8 +596,112 @@ struct SceneDraft {
     composition: String,
     dialogue: String,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
 struct SceneResponse { scenes: Vec<SceneDraft> }
+
+fn scene_value_as_string(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Null => String::new(),
+        Value::Array(items) => items
+            .iter()
+            .map(scene_value_as_string)
+            .filter(|text| !text.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("; "),
+        // Scene descriptions occasionally arrive as structured objects. Prefer a
+        // readable text-like field; preserve the whole object if none is available.
+        Value::Object(map) => {
+            for key in ["text", "description", "value", "name", "location", "time", "action", "details", "summary"] {
+                if let Some(child) = map.get(key) {
+                    let text = scene_value_as_string(child);
+                    if !text.trim().is_empty() {
+                        return text;
+                    }
+                }
+            }
+            serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
+        }
+        Value::Number(_) | Value::Bool(_) => value.to_string(),
+    }
+}
+
+fn scene_character_as_string(value: &Value) -> String {
+    if let Value::Object(map) = value {
+        for key in ["name", "character", "character_name", "id", "text", "value"] {
+            if let Some(name) = map.get(key).and_then(Value::as_str) {
+                if !name.trim().is_empty() {
+                    return name.trim().to_string();
+                }
+            }
+        }
+    }
+    scene_value_as_string(value)
+}
+
+fn normalize_scene_response_json(value: &mut Value) {
+    let Some(root) = value.as_object_mut() else { return };
+    let Some(scenes_value) = root.get_mut("scenes") else { return };
+
+    if let Value::Object(_) = scenes_value {
+        *scenes_value = Value::Array(vec![scenes_value.clone()]);
+    } else if let Value::Null = scenes_value {
+        *scenes_value = Value::Array(Vec::new());
+    } else if !scenes_value.is_array() {
+        *scenes_value = Value::Array(vec![scenes_value.clone()]);
+    }
+
+    let Some(scenes) = scenes_value.as_array_mut() else { return };
+    for scene in scenes {
+        if !scene.is_object() {
+            *scene = json!({"description": scene_value_as_string(scene)});
+        }
+        let Some(fields) = scene.as_object_mut() else { continue };
+        for key in ["description", "location", "time", "action", "composition", "dialogue"] {
+            if let Some(value) = fields.get_mut(key) {
+                *value = Value::String(scene_value_as_string(value));
+            }
+        }
+
+        match fields.get_mut("characters") {
+            Some(Value::Array(names)) => {
+                for name in names.iter_mut() {
+                    *name = Value::String(scene_character_as_string(name));
+                }
+            }
+            Some(Value::Null) | None => {
+                fields.insert("characters".into(), Value::Array(Vec::new()));
+            }
+            Some(value) => {
+                let names = match value {
+                    Value::Object(map) if map.contains_key("name") || map.contains_key("character") || map.contains_key("character_name") || map.contains_key("id") => {
+                        vec![Value::String(scene_character_as_string(value))]
+                    }
+                    Value::Object(map) => map.keys().map(|name| Value::String(name.clone())).collect(),
+                    Value::String(text) if text.trim().is_empty() => Vec::new(),
+                    other => vec![Value::String(scene_character_as_string(other))],
+                };
+                fields.insert("characters".into(), Value::Array(names));
+            }
+        }
+    }
+}
+
+fn parse_scene_response(raw: &str) -> Result<SceneResponse, String> {
+    let cleaned = clean_json(raw);
+    match serde_json::from_str::<SceneResponse>(cleaned) {
+        Ok(parsed) => Ok(parsed),
+        Err(strict_error) => {
+            let mut value = serde_json::from_str::<Value>(cleaned)
+                .map_err(|json_error| format!("invalid JSON: {json_error}; strict schema error: {strict_error}"))?;
+            normalize_scene_response_json(&mut value);
+            serde_json::from_value::<SceneResponse>(value).map_err(|tolerant_error| {
+                format!("strict schema error: {strict_error}; scene compatibility normalization also failed: {tolerant_error}")
+            })
+        }
+    }
+}
 #[derive(Debug, Deserialize, Default)]
 #[serde(default)]
 struct ImagePromptResponse {
@@ -2244,7 +2350,7 @@ async fn extract_scenes(story_id: String, chapter_number: usize, store: State<'_
     let visual_characters = story.bible.characters.iter().map(|c| format!("{} [{}] — appearance: {}; clothing: {}; personality: {:?}", c.id, c.name, c.appearance, c.clothing, c.personality)).collect::<Vec<_>>().join("
 ");
     let system = settings.scene_director_system_prompt.as_str();
-    let schema = r#"{"scenes":[{"description":"","location":"","time":"","characters":[],"action":"","composition":"","dialogue":""}]}"#;
+    let schema = r#"{\"scenes\":[{\"description\":\"single coherent visual beat\",\"location\":\"specific location as a string\",\"time\":\"time of day as a string\",\"characters\":[\"Exact canonical character name\"],\"action\":\"visible action as a string\",\"composition\":\"camera and framing as a string\",\"dialogue\":\"dialogue as a string or empty string\"}]}"#;
     let user = format!("CHAPTER {}
 TITLE: {}
 
@@ -2258,7 +2364,7 @@ Return:
 {}", chapter.number, chapter.title, chapter.text, visual_characters, schema);
     emit_pipeline(store.app(), "scene_director", "started", format!("Extracting scenes for Chapter {}", chapter_number));
     let raw = chat(store.app(), &settings, "scene_director", system, &user).await?;
-    let parsed: SceneResponse = serde_json::from_str(clean_json(&raw)).map_err(|e| AppError::ModelResponse(format!("{}; raw model output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
+    let parsed: SceneResponse = parse_scene_response(&raw).map_err(|e| AppError::ModelResponse(format!("{}; raw model output starts with: {}", e, &raw.chars().take(300).collect::<String>())))?;
     validate_scene_response(&parsed)?;
     for scene in &parsed.scenes {
         for character_name in &scene.characters {
@@ -3000,6 +3106,49 @@ mod tests {
 
         let top_level = json!({"thinking":"still thinking"});
         assert_eq!(extract_stream_reasoning(&top_level), Some("still thinking"));
+    }
+
+    #[test]
+    fn scene_parser_normalizes_object_valued_scene_fields() {
+        let raw = r#"{
+            "scenes": [{
+                "description": "An atmospheric view of the wastes.",
+                "location": {"name": "Ashen Wastes", "region": "Starfall Zone ruins"},
+                "time": {"period": "Dusk", "weather": "perpetual twilight"},
+                "characters": [{"name": "Aetheria Vane"}, "Milo"],
+                "action": {"text": "Aetheria scans the horizon."},
+                "composition": {"framing": "wide shot", "camera": "low angle"},
+                "dialogue": {"text": "We are not alone."}
+            }]
+        }"#;
+
+        let parsed = parse_scene_response(raw)
+            .expect("map-valued scene details should be normalized to strings");
+        assert_eq!(parsed.scenes.len(), 1);
+        assert_eq!(parsed.scenes[0].location, "Ashen Wastes");
+        assert_eq!(parsed.scenes[0].time, "Dusk");
+        assert_eq!(parsed.scenes[0].action, "Aetheria scans the horizon.");
+        assert_eq!(parsed.scenes[0].composition, r#"{"camera":"low angle","framing":"wide shot"}"#);
+        assert_eq!(parsed.scenes[0].dialogue, "We are not alone.");
+        assert_eq!(parsed.scenes[0].characters, vec!["Aetheria Vane", "Milo"]);
+    }
+
+    #[test]
+    fn scene_parser_accepts_single_scene_object_and_scalar_characters() {
+        let raw = r#"{
+            "scenes": {
+                "description": "A lone character crosses a bridge.",
+                "location": "Iron Bridge",
+                "time": "Night",
+                "characters": "Aetheria Vane",
+                "action": "Walking",
+                "composition": "Wide shot",
+                "dialogue": ""
+            }
+        }"#;
+        let parsed = parse_scene_response(raw).expect("single scene and scalar character should normalize");
+        assert_eq!(parsed.scenes.len(), 1);
+        assert_eq!(parsed.scenes[0].characters, vec!["Aetheria Vane"]);
     }
 
     #[test]
