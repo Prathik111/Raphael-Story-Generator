@@ -1780,17 +1780,28 @@ fn validate_settings(settings: &AppSettings) -> AppResult<()> {
 }
 
 fn comfy_relative_model_name(path: &str, relative_path: Option<&str>, folder: &str, fallback: &str) -> String {
-    let source = if !path.trim().is_empty() { path } else { relative_path.unwrap_or_default() };
+    // Registry paths can be absolute storage paths while relative_path contains
+    // the actual ComfyUI model directory (for example, diffusion_models/...).
+    // Prefer a path anchored at ComfyUI's models root; otherwise use the
+    // Registry-relative path so we do not silently discard the model folder.
+    let path_normalized = path.replace('\\', "/");
+    let path_lower = path_normalized.to_ascii_lowercase();
+    let path_has_models_root = path_lower.contains("/models/") || path_lower.starts_with("models/");
+    let relative = relative_path.unwrap_or_default();
+    let source = if path_has_models_root || relative.trim().is_empty() {
+        path_normalized
+    } else {
+        relative.replace('\\', "/")
+    };
     if source.trim().is_empty() {
         return fallback.to_string();
     }
 
-    let normalized = source.replace('\\', "/");
-    let lower = normalized.to_ascii_lowercase();
+    let lower = source.to_ascii_lowercase();
     let mut relative = if let Some(index) = lower.find("/models/") {
-        Some(normalized[index + "/models/".len()..].to_string())
+        Some(source[index + "/models/".len()..].to_string())
     } else {
-        lower.starts_with("models/").then(|| normalized["models/".len()..].to_string())
+        lower.starts_with("models/").then(|| source["models/".len()..].to_string())
     };
 
     if let Some(value) = relative.as_mut() {
@@ -1808,14 +1819,14 @@ fn comfy_relative_model_name(path: &str, relative_path: Option<&str>, folder: &s
 
     let marker = format!("/{folder}/");
     if let Some(index) = lower.find(&marker) {
-        return normalized[index + marker.len()..].replace('/', "\\");
+        return source[index + marker.len()..].replace('/', "\\");
     }
     let folder_prefix = format!("{folder}/");
     if lower.starts_with(&folder_prefix) {
-        return normalized[folder_prefix.len()..].replace('/', "\\");
+        return source[folder_prefix.len()..].replace('/', "\\");
     }
     if folder.eq_ignore_ascii_case("unet") && lower.starts_with("diffusion_models/") {
-        return normalized["diffusion_models/".len()..].replace('/', "\\");
+        return source["diffusion_models/".len()..].replace('/', "\\");
     }
     fallback.to_string()
 }
@@ -1824,10 +1835,11 @@ fn checkpoint_uses_unet_loader(path: &str, relative_path: Option<&str>) -> bool 
     let combined = format!("{} {}", path, relative_path.unwrap_or_default())
         .replace('\\', "/")
         .to_ascii_lowercase();
-    combined.contains("models/unet/")
-        || combined.contains("models/diffusion_models/")
-        || combined.contains("/unet/")
-        || combined.contains("/diffusion_models/")
+    // Treat the model directory as a path component. Registry paths often
+    // start with "diffusion_models/" or "unet/" without a leading slash.
+    combined
+        .split('/')
+        .any(|component| component == "unet" || component == "diffusion_models")
 }
 
 fn replace_workflow_placeholders(value: &mut Value, replacements: &[(&str, Value)]) {
@@ -3620,6 +3632,24 @@ mod tests {
             r"D:\ComfyUI\models\checkpoints\model.safetensors",
             None,
         ));
+        // Registry-relative paths can lack a leading slash or "models/" root.
+        assert!(checkpoint_uses_unet_loader(
+            "",
+            Some(r"diffusion_models\anima\model.safetensors"),
+        ));
+        assert!(checkpoint_uses_unet_loader(
+            r"C:\Registry\artifacts\model.safetensors",
+            Some("diffusion_models/anima/model.safetensors"),
+        ));
+        assert_eq!(
+            comfy_relative_model_name(
+                r"C:\Registry\artifacts\model.safetensors",
+                Some("diffusion_models/anima/model.safetensors"),
+                "unet",
+                "fallback.safetensors",
+            ),
+            r"anima\model.safetensors"
+        );
     }
 
     #[test]
