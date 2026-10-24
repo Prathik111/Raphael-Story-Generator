@@ -181,6 +181,7 @@ export interface AppSettings {
   web_context_max_chars: number;
   web_research_system_prompt: string;
   ollama_lan_port: number;
+  web_host_port: number;
   comfyui_url: string;
   comfyui_workflow_json: string;
 }
