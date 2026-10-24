@@ -2915,10 +2915,10 @@ async fn select_scene_loras(
     // the canonical character names. Generic style, pose and concept LoRAs
     // never enter this scene's dynamic selection pool.
     let locked_lora_ids = story.visual_config.style_loras.iter()
-        .map(|lora| lora.id.as_str())
+        .map(|lora| lora.id.clone())
         .collect::<std::collections::HashSet<_>>();
     let mut character_candidates = candidates.iter()
-        .filter(|model| !locked_lora_ids.contains(model.id.as_str()))
+        .filter(|model| !locked_lora_ids.contains(&model.id))
         .filter(|model| is_character_lora(model))
         .map(|model| {
             let score = characters.iter()
