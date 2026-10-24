@@ -172,6 +172,8 @@ pub struct AppSettings {
     pub ollama_lan_port: u16,
     #[serde(default = "default_web_host_port")]
     pub web_host_port: u16,
+    #[serde(default)]
+    pub default_style_lora_ids: Vec<String>,
     pub comfyui_url: String,
     pub comfyui_workflow_json: String,
 }
@@ -198,6 +200,7 @@ impl Default for AppSettings {
             web_research_system_prompt: default_web_research_system_prompt(),
             ollama_lan_port: default_ollama_lan_port(),
             web_host_port: default_web_host_port(),
+            default_style_lora_ids: Vec::new(),
             comfyui_url: "http://127.0.0.1:8188".into(),
             comfyui_workflow_json: String::new(),
         }
@@ -1736,8 +1739,8 @@ fn validate_visual_setup(
     if checkpoint.file_name.trim().is_empty() {
         return Err(AppError::Registry("selected checkpoint has no available file".into()));
     }
-    if styles.len() > 2 {
-        return Err(AppError::Registry("at most two style LoRAs can be locked for a story".into()));
+    if styles.len() > 6 {
+        return Err(AppError::Registry("at most six style LoRAs can be locked for a story".into()));
     }
     for style in styles {
         if style.file_name.trim().is_empty() {
@@ -1760,6 +1763,9 @@ fn validate_settings(settings: &AppSettings) -> AppResult<()> {
     }
     if settings.web_host_port < 1024 {
         return Err(AppError::Llm("LAN web-host port must be between 1024 and 65535".into()));
+    }
+    if settings.default_style_lora_ids.len() > 6 {
+        return Err(AppError::Registry("at most six default style LoRAs can be selected in Settings".into()));
     }
     if settings.web_search_max_results == 0 || settings.web_search_max_results > 12 {
         return Err(AppError::WebResearch("web search results must be between 1 and 12".into()));
@@ -2194,7 +2200,7 @@ async fn create_story(
     let compatible_ids = compatible.iter().map(|model| model.id.as_str()).collect::<std::collections::HashSet<_>>();
 
     let mut style_loras = Vec::new();
-    for id in visual_setup.style_lora_ids.iter().take(2) {
+    for id in visual_setup.style_lora_ids.iter().take(6) {
         let model = client.get(id).await
             .map_err(|e| AppError::Registry(format!("failed to load style LoRA {id}: {e}")))?;
         if model.model_type != registry_core::ModelType::Lora {
@@ -2908,7 +2914,11 @@ async fn select_scene_loras(
     // Match only compatible, explicitly character-tagged Registry entries to
     // the canonical character names. Generic style, pose and concept LoRAs
     // never enter this scene's dynamic selection pool.
+    let locked_lora_ids = story.visual_config.style_loras.iter()
+        .map(|lora| lora.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
     let mut character_candidates = candidates.iter()
+        .filter(|model| !locked_lora_ids.contains(model.id.as_str()))
         .filter(|model| is_character_lora(model))
         .map(|model| {
             let score = characters.iter()
@@ -2959,7 +2969,7 @@ async fn select_scene_loras(
     let system = settings.lora_selector_system_prompt.as_str();
     let schema = r#"{"selections":[{"id":"","role":"character","character":"exact canonical character name","weight":0.85,"reason":"matching Registry name/tag/description"}]}"#;
     let user = format!(
-        "SCENE: {}\nACTION: {}\nCOMPOSITION: {}\n\nCANONICAL CHARACTERS IN THIS SCENE:\n{}\n\nMATCHED CHARACTER-ONLY REGISTRY CANDIDATES:\n{}\n\nChoose only a LoRA whose Registry metadata identifies the same character. Use only supplied candidate IDs and exact canonical character names. Select at most one LoRA per character, at most two total. Do not choose generic style, pose, concept, setting, or background LoRAs. If none is an unambiguous match, return an empty selections array. The reason must quote or name the relevant Registry metadata.\n\nReturn:\n{}",
+        "SCENE: {}\nACTION: {}\nCOMPOSITION: {}\n\nCANONICAL CHARACTERS IN THIS SCENE:\n{}\n\nMATCHED CHARACTER-ONLY REGISTRY CANDIDATES:\n{}\n\nChoose only a LoRA whose Registry metadata identifies the same character. Use only supplied candidate IDs and exact canonical character names. Select at most one LoRA per character, at most two total. Do not select a LoRA already present in the locked style stack. Do not choose generic style, pose, concept, setting, or background LoRAs. If none is an unambiguous match, return an empty selections array. The reason must quote or name the relevant Registry metadata.\n\nReturn:\n{}",
         scene.description,
         scene.action,
         scene.composition,
