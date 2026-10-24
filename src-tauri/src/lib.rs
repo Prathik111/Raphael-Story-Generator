@@ -4407,6 +4407,19 @@ mod tests {
     }
 
     #[test]
+    fn web_host_port_defaults_and_rejects_privileged_ports() {
+        let mut settings = AppSettings::default();
+        assert_eq!(settings.web_host_port, 1425);
+        assert!(validate_settings(&settings).is_ok());
+
+        settings.web_host_port = 80;
+        assert!(validate_settings(&settings).is_err());
+
+        settings.web_host_port = 65_535;
+        assert!(validate_settings(&settings).is_ok());
+    }
+
+    #[test]
     fn invalid_settings_are_rejected() {
         let mut settings = AppSettings::default();
         settings.temperature = 2.5;
