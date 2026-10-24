@@ -444,7 +444,7 @@ impl RegistryState {
             }
         }
 
-        let token = self.read_token()
+        let token = self.authorized_token().await
             .map_err(|error| AppError::Registry(format!("Registry authentication is unavailable: {error}")))?;
         RegistryClient::new(self.inner.base_url.clone(), token)
             .map_err(|error| AppError::Registry(format!("Registry client could not be initialized: {error}")))
@@ -485,8 +485,8 @@ impl RegistryState {
             url.push_str(&format!("?type={}", model_type));
         }
 
-        let token = self.read_token()
-            .map_err(|error| AppError::Registry(format!("failed to read Registry token: {error}")))?;
+        let token = self.authorized_token().await
+            .map_err(|error| AppError::Registry(format!("failed to authenticate with Registry: {error}")))?;
         let response = self.inner.http
             .get(url)
             .bearer_auth(token.trim())
