@@ -127,7 +127,7 @@
 
 /* Raphael ambient core and service health */
 .app-shell{position:relative;isolation:isolate}
-.topbar,.workspace{position:relative;z-index:2}
+.topbar{position:relative;z-index:10}.workspace{position:relative;z-index:2}
 .background-raphael{position:fixed;inset:0;z-index:0;display:grid;place-items:center;pointer-events:none;overflow:hidden;opacity:.075}
 .background-raphael .raphael-core{transform:scale(11);animation:raphael-breathe 9s ease-in-out infinite}
 .background-raphael .core-orbit{animation-duration:7s;opacity:.45}
