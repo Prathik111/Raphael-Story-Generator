@@ -172,10 +172,6 @@ impl RegistryState {
         // For a local Registry, the persisted token file is authoritative. The
         // environment may contain a stale token inherited from an old launch.
         add_token_file_candidate(&mut candidates, self.inner.token_path.clone());
-        if let Ok(value) = env::var("RAPHAEL_REGISTRY_AUTH_TOKEN") {
-            add_token_candidate(&mut candidates, value, "RAPHAEL_REGISTRY_AUTH_TOKEN".into(), None);
-        }
-
         // Older Registry builds used Roaming AppData, while current Raphael
         // clients use Local AppData. Probe both known local locations so the
         // correct token can be recovered without deleting model data.
@@ -197,6 +193,12 @@ impl RegistryState {
                     }
                 }
             }
+        }
+
+        // Environment variables can linger across upgrades, so only use the
+        // environment token after all known on-disk local token files.
+        if let Ok(value) = env::var("RAPHAEL_REGISTRY_AUTH_TOKEN") {
+            add_token_candidate(&mut candidates, value, "RAPHAEL_REGISTRY_AUTH_TOKEN".into(), None);
         }
 
         candidates
