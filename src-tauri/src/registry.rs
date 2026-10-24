@@ -632,7 +632,7 @@ fn registry_data_dir() -> PathBuf {
     }
 
     ProjectDirs::from("com", "Raphael", "ModelRegistry")
-        .map(|projects| projects.data_dir().join("data"))
+        .map(|projects| projects.data_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from(".raphael-model-registry").join("data"))
 }
 
