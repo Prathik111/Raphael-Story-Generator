@@ -133,6 +133,7 @@ fn default_web_search_max_results() -> usize { 8 }
 fn default_web_fetch_max_chars() -> usize { 12_000 }
 fn default_web_context_max_chars() -> usize { 36_000 }
 fn default_ollama_lan_port() -> u16 { 11435 }
+fn default_web_host_port() -> u16 { 1425 }
 fn default_web_research_system_prompt() -> String {
     research::DEFAULT_WEB_RESEARCH_SYSTEM_PROMPT.to_string()
 }
@@ -169,6 +170,8 @@ pub struct AppSettings {
     pub web_research_system_prompt: String,
     #[serde(default = "default_ollama_lan_port")]
     pub ollama_lan_port: u16,
+    #[serde(default = "default_web_host_port")]
+    pub web_host_port: u16,
     pub comfyui_url: String,
     pub comfyui_workflow_json: String,
 }
@@ -194,6 +197,7 @@ impl Default for AppSettings {
             web_context_max_chars: default_web_context_max_chars(),
             web_research_system_prompt: default_web_research_system_prompt(),
             ollama_lan_port: default_ollama_lan_port(),
+            web_host_port: default_web_host_port(),
             comfyui_url: "http://127.0.0.1:8188".into(),
             comfyui_workflow_json: String::new(),
         }
@@ -1753,6 +1757,9 @@ fn validate_settings(settings: &AppSettings) -> AppResult<()> {
     validate_image_size(settings.image_width, settings.image_height)?;
     if settings.ollama_lan_port < 1024 {
         return Err(AppError::Llm("Ollama LAN host port must be between 1024 and 65535".into()));
+    }
+    if settings.web_host_port < 1024 {
+        return Err(AppError::Llm("LAN web-host port must be between 1024 and 65535".into()));
     }
     if settings.web_search_max_results == 0 || settings.web_search_max_results > 12 {
         return Err(AppError::WebResearch("web search results must be between 1 and 12".into()));
@@ -3517,10 +3524,10 @@ struct WebHostStatus {
 }
 
 impl WebHostStatus {
-    fn stopped() -> Self {
+    fn stopped(port: u16) -> Self {
         Self {
             running: false,
-            port: 1425,
+            port,
             lan_url: None,
             detail: Some("Raphael LAN web host is stopped.".into()),
         }
@@ -3595,7 +3602,7 @@ fn web_dist_directory(app: &AppHandle) -> Option<PathBuf> {
 }
 
 #[tauri::command]
-async fn start_web_host(app: AppHandle, host: State<'_, LanWebHost>) -> Result<WebHostStatus, String> {
+async fn start_web_host(app: AppHandle, host: State<'_, LanWebHost>, store: State<'_, Store>) -> Result<WebHostStatus, String> {
     {
         let running = host.running.lock().map_err(|_| "LAN web-host state lock is poisoned".to_string())?;
         if let Some(active) = running.as_ref() {
@@ -3606,7 +3613,10 @@ async fn start_web_host(app: AppHandle, host: State<'_, LanWebHost>) -> Result<W
     let dist = web_dist_directory(&app)
         .ok_or_else(|| "Could not find the built Raphael web app (dist/index.html). Build Raphael first, then restart the LAN host.".to_string())?;
     let ip = detect_lan_ipv4()?;
-    let port = 1425;
+    let port = {
+        let settings = store.settings.read().map_err(|_| "application settings lock is poisoned".to_string())?;
+        settings.web_host_port
+    };
     let address = SocketAddr::from((ip, port));
     let listener = TcpListener::bind(address).await
         .map_err(|error| format!("Could not start Raphael LAN hosting on {address}: {error}. Close the application using this port and retry."))?;
@@ -3647,19 +3657,32 @@ async fn start_web_host(app: AppHandle, host: State<'_, LanWebHost>) -> Result<W
 }
 
 #[tauri::command]
-fn stop_web_host(host: State<'_, LanWebHost>) -> Result<WebHostStatus, String> {
+fn stop_web_host(host: State<'_, LanWebHost>, store: State<'_, Store>) -> Result<WebHostStatus, String> {
     let mut running = host.running.lock().map_err(|_| "LAN web-host state lock is poisoned".to_string())?;
     if let Some(active) = running.take() {
         let _ = active.shutdown.send(());
         active.task.abort();
     }
-    Ok(WebHostStatus::stopped())
+    drop(running);
+    let port = {
+        let settings = store.settings.read().map_err(|_| "application settings lock is poisoned".to_string())?;
+        settings.web_host_port
+    };
+    Ok(WebHostStatus::stopped(port))
 }
 
 #[tauri::command]
-fn get_web_host_status(host: State<'_, LanWebHost>) -> Result<WebHostStatus, String> {
+fn get_web_host_status(host: State<'_, LanWebHost>, store: State<'_, Store>) -> Result<WebHostStatus, String> {
     let running = host.running.lock().map_err(|_| "LAN web-host state lock is poisoned".to_string())?;
-    Ok(running.as_ref().map(|active| active.status.clone()).unwrap_or_else(WebHostStatus::stopped))
+    if let Some(active) = running.as_ref() {
+        return Ok(active.status.clone());
+    }
+    drop(running);
+    let port = {
+        let settings = store.settings.read().map_err(|_| "application settings lock is poisoned".to_string())?;
+        settings.web_host_port
+    };
+    Ok(WebHostStatus::stopped(port))
 }
 
 async fn lan_web_events(
