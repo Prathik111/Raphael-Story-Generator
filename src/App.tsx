@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { api, subscribeToComfy, subscribeToLlm, subscribeToPipeline } from './tauri';
 import type { AppSettings, AppState, Chapter, ComfyGenerationEvent, LlmGenerationEvent, PipelineEvent, RegistryCatalog, RegistryStatusDto, Scene, ServiceStatusBoard, Story, StoryVisualSetup, WebHostStatus } from './types';
 
+const MAX_STYLE_LORAS = 6;
+
 function ReferenceHudBackground() {
   return <iframe className="raphael-bg" src="./reference/index.html" title="Raphael background" aria-hidden="true" />;
 }
@@ -192,7 +194,7 @@ function VisualSetupOverlay({
       setStyleLoraIds(styleLoraIds.filter(value => value !== id));
       return;
     }
-    if (styleLoraIds.length >= 2) return;
+    if (styleLoraIds.length >= MAX_STYLE_LORAS) return;
     setStyleLoraIds([...styleLoraIds, id]);
   };
 
@@ -239,9 +241,9 @@ function VisualSetupOverlay({
           <div className="model-selection-section-head">
             <div>
               <div className="section-head">STYLE LORAS</div>
-              <p>Choose up to two style models to keep locked across the story.</p>
+              <p>Choose up to six style models to keep locked across the story. Compatible character LoRAs can still be added per scene.</p>
             </div>
-            <span className="selection-count">{styleLoraIds.length}/2</span>
+            <span className="selection-count">{styleLoraIds.length}/{MAX_STYLE_LORAS}</span>
           </div>
           {registryStatus.status !== 'on'
             ? <div className="model-selection-empty">Connect the Model Registry to choose LoRAs.</div>
@@ -254,7 +256,7 @@ function VisualSetupOverlay({
                       model={model}
                       kind="lora"
                       selected={styleLoraIds.includes(model.id)}
-                      disabled={busy || (!styleLoraIds.includes(model.id) && styleLoraIds.length >= 2)}
+                      disabled={busy || (!styleLoraIds.includes(model.id) && styleLoraIds.length >= MAX_STYLE_LORAS)}
                       onClick={() => toggleLora(model.id)}
                     />
                   ))}
@@ -263,7 +265,7 @@ function VisualSetupOverlay({
       </div>
 
       <footer className="settings-footer model-selection-footer">
-        <span className="tiny">{styleLoraIds.length}/2 STYLE LORAS</span>
+        <span className="tiny">{styleLoraIds.length}/{MAX_STYLE_LORAS} STYLE LORAS</span>
         <button type="button" className="primary-btn" onClick={onClose}>DONE</button>
       </footer>
     </section>
@@ -844,7 +846,7 @@ function LanWebHostControl() {
   </div>;
 }
 
-function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey, onClose, onError }: { settings: AppSettings; llmApiKeyConfigured: boolean; onSave: (settings: AppSettings) => Promise<void>; onClearApiKey: () => Promise<void>; onClose: () => void; onError: (message: string) => void }) {
+function SettingsOverlay({ settings, catalog, registryStatus, catalogError, llmApiKeyConfigured, onSave, onClearApiKey, onClose, onError }: { settings: AppSettings; catalog: RegistryCatalog; registryStatus: RegistryStatusDto; catalogError: string | null; llmApiKeyConfigured: boolean; onSave: (settings: AppSettings) => Promise<void>; onClearApiKey: () => Promise<void>; onClose: () => void; onError: (message: string) => void }) {
   const [draft, setDraft] = useState(settings);
   const [busy, setBusy] = useState(false);
   const [researchTesting, setResearchTesting] = useState(false);
@@ -853,6 +855,16 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
   const [ollamaDetectionResult, setOllamaDetectionResult] = useState<string | null>(null);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  const toggleDefaultStyleLora = (id: string) => {
+    const selected = draft.default_style_lora_ids || [];
+    if (selected.includes(id)) {
+      setDraft({ ...draft, default_style_lora_ids: selected.filter(value => value !== id) });
+      return;
+    }
+    if (selected.length >= MAX_STYLE_LORAS) return;
+    setDraft({ ...draft, default_style_lora_ids: [...selected, id] });
+  };
 
   const save = async () => {
     setBusy(true);
@@ -926,6 +938,29 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
       {ollamaModels.length ? <label>Host model<select value={draft.llm_model} onChange={e => setDraft({ ...draft, llm_model: e.target.value })}>{ollamaModels.map(model => <option value={model} key={model}>{model}</option>)}</select></label> : null}
       {ollamaDetectionResult ? <div className={ollamaDetectionResult.startsWith('Loaded ') ? 'ollama-inline-result' : 'error-box'}>{ollamaDetectionResult}</div> : null}
 
+      <div className="section-head setting-gap">VISUAL MODEL DEFAULTS · STYLE LORAS</div>
+      <div className="settings-lora-toolbar">
+        <span className="selection-count">{(draft.default_style_lora_ids || []).length}/{MAX_STYLE_LORAS} SELECTED</span>
+        <button type="button" className="mini-btn" onClick={() => setDraft({ ...draft, default_style_lora_ids: [] })} disabled={!draft.default_style_lora_ids?.length}>CLEAR SELECTION</button>
+      </div>
+      <p className="settings-hint settings-lora-help">These LoRAs are locked into every new story and applied across its scenes. Raphael will still search the Registry for compatible character-identity LoRAs that match characters in each scene, and add those automatically. A manually selected LoRA will not be added twice. Choose a compatible checkpoint in VISUAL MODELS before creating the story.</p>
+      {registryStatus.status !== 'on'
+        ? <div className="model-selection-empty">{catalogError || registryStatus.detail || 'Connect the Model Registry to select LoRAs.'}</div>
+        : catalog.loras.length === 0
+          ? <div className="model-selection-empty">No LoRAs are registered in the Model Registry.</div>
+          : <div className="settings-lora-grid">
+              {catalog.loras.map(model => (
+                <RegistryModelChoiceCard
+                  key={model.id}
+                  model={model}
+                  kind="lora"
+                  selected={(draft.default_style_lora_ids || []).includes(model.id)}
+                  disabled={!(draft.default_style_lora_ids || []).includes(model.id) && (draft.default_style_lora_ids || []).length >= MAX_STYLE_LORAS}
+                  onClick={() => toggleDefaultStyleLora(model.id)}
+                />
+              ))}
+            </div>}
+
       <div className="section-head setting-gap">LAN WEB HOSTING</div>
       <label>Web host port<input type="number" min="1024" max="65535" step="1" value={draft.web_host_port} onChange={e => setDraft({ ...draft, web_host_port: Number(e.target.value) || 1425 })}/></label>
       <small className="settings-hint">Choose the TCP port used for the Raphael LAN web address (1024–65535). Save settings, then stop and restart WEB HOST from the top bar if it is already running. The new port takes effect when hosting starts.</small>
@@ -992,11 +1027,15 @@ export default function App() {
     ollama: { service: 'ollama', status: 'checking', url: 'http://127.0.0.1:11434', detail: 'Checking Ollama API…' },
   });
   const serviceProbeActive = useRef(false);
-
+  const initialSettingsDefaultsApplied = useRef(false);
 
   const loadState = async () => {
     const next = await api.getState();
     setState(next);
+    if (!initialSettingsDefaultsApplied.current) {
+      initialSettingsDefaultsApplied.current = true;
+      setStyleLoraIds((next.settings.default_style_lora_ids || []).slice(0, MAX_STYLE_LORAS));
+    }
     return next;
   };
   const selectStory = async (id: string) => {
@@ -1239,7 +1278,7 @@ export default function App() {
     setError(null);
     const traceId = appendLocalPipelineEvent('generation', 'started', 'Generation started — preparing research and model calls…');
     try {
-      const visualSetup: StoryVisualSetup = { checkpoint_id: checkpointId, style_lora_ids: styleLoraIds.slice(0, 2) };
+      const visualSetup: StoryVisualSetup = { checkpoint_id: checkpointId, style_lora_ids: styleLoraIds.slice(0, MAX_STYLE_LORAS) };
       const next = await api.createStory(prompt.trim(), visualSetup);
       setStory(next);
       setSelectedChapterNumber(next.chapters[next.chapters.length - 1]?.number ?? null);
@@ -1519,10 +1558,14 @@ export default function App() {
     {promptPreview ? <div className="overlay" onMouseDown={() => setPromptPreview(null)}><section className="prompt-viewer hud-panel" onMouseDown={e => e.stopPropagation()}><header className="settings-header"><div><div className="eyebrow">IMAGE BUILDER</div><h2>SCENE {String(promptPreview.order).padStart(2, '0')} PROMPTS</h2></div><button className="settings-close" onClick={() => setPromptPreview(null)}>×</button></header><div className="prompt-viewer-body"><div><div className="section-head">IMAGE SIZE</div><div className="scene-image-size prompt-size">{promptPreview.image_width}×{promptPreview.image_height}</div><div className="section-head">POSITIVE PROMPT</div><pre className="prompt-box">{promptPreview.positive_prompt}</pre></div><div><div className="section-head">NEGATIVE PROMPT</div><pre className="prompt-box">{promptPreview.negative_prompt}</pre></div></div></section></div> : null}
     {settingsOpen ? <SettingsOverlay
       settings={state.settings}
+      catalog={registryCatalog}
+      registryStatus={registryStatus}
+      catalogError={registryCatalogError}
       llmApiKeyConfigured={state.llm_api_key_configured}
       onSave={async value => {
         const suppliedKey = Boolean(value.llm_api_key.trim());
         const next = await api.saveSettings(value);
+        setStyleLoraIds((next.default_style_lora_ids || []).slice(0, MAX_STYLE_LORAS));
         setState(prev => prev ? {
           ...prev,
           settings: next,
