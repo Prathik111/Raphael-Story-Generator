@@ -926,6 +926,10 @@ function SettingsOverlay({ settings, llmApiKeyConfigured, onSave, onClearApiKey,
       {ollamaModels.length ? <label>Host model<select value={draft.llm_model} onChange={e => setDraft({ ...draft, llm_model: e.target.value })}>{ollamaModels.map(model => <option value={model} key={model}>{model}</option>)}</select></label> : null}
       {ollamaDetectionResult ? <div className={ollamaDetectionResult.startsWith('Loaded ') ? 'ollama-inline-result' : 'error-box'}>{ollamaDetectionResult}</div> : null}
 
+      <div className="section-head setting-gap">LAN WEB HOSTING</div>
+      <label>Web host port<input type="number" min="1024" max="65535" step="1" value={draft.web_host_port} onChange={e => setDraft({ ...draft, web_host_port: Number(e.target.value) || 1425 })}/></label>
+      <small className="settings-hint">Choose the TCP port used for the Raphael LAN web address (1024–65535). Save settings, then stop and restart WEB HOST from the top bar if it is already running. The new port takes effect when hosting starts.</small>
+
       <label>Temperature<input type="number" min="0" max="2" step="0.1" value={draft.temperature} onChange={e => setDraft({ ...draft, temperature: Number(e.target.value) || 0 })}/></label>
       <div className="section-head setting-gap">SYSTEM PROMPTS · FULLY CUSTOMIZABLE</div>
       <small className="settings-hint">These prompts are sent as the system message for each LLM generation stage. They are persisted with the application settings and shown live in the Generation Trace.</small>
