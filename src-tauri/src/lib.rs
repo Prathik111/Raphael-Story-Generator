@@ -4430,6 +4430,16 @@ mod tests {
     }
 
     #[test]
+    fn default_style_loras_are_limited_to_six() {
+        let mut settings = AppSettings::default();
+        settings.default_style_lora_ids = (0..6).map(|id| format!("lora-{id}")).collect();
+        assert!(validate_settings(&settings).is_ok());
+
+        settings.default_style_lora_ids.push("lora-extra".into());
+        assert!(validate_settings(&settings).is_err());
+    }
+
+    #[test]
     fn invalid_settings_are_rejected() {
         let mut settings = AppSettings::default();
         settings.temperature = 2.5;
