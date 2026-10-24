@@ -182,6 +182,7 @@ export interface AppSettings {
   web_research_system_prompt: string;
   ollama_lan_port: number;
   web_host_port: number;
+  default_style_lora_ids: string[];
   comfyui_url: string;
   comfyui_workflow_json: string;
 }
