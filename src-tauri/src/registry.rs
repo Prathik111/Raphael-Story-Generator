@@ -165,7 +165,11 @@ impl RegistryState {
             if let Ok(value) = env::var("RAPHAEL_REGISTRY_AUTH_TOKEN") {
                 add_token_candidate(&mut candidates, value, "RAPHAEL_REGISTRY_AUTH_TOKEN".into(), None);
             }
-            add_token_file_candidate(&mut candidates, self.inner.token_path.clone());
+            // A token file is safe to use for a remote endpoint only when the
+            // operator explicitly configured its path.
+            if let Some(path) = env::var_os("RAPHAEL_REGISTRY_TOKEN_FILE") {
+                add_token_file_candidate(&mut candidates, PathBuf::from(path));
+            }
             return candidates;
         }
 
