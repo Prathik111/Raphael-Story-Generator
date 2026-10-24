@@ -90,6 +90,29 @@ struct RegistryInner {
     last_error: RwLock<Option<String>>,
 }
 
+fn add_token_candidate(
+    candidates: &mut Vec<(String, String, Option<PathBuf>)>,
+    token: String,
+    source: String,
+    path: Option<PathBuf>,
+) {
+    let token = token.trim().to_string();
+    if token.is_empty() || candidates.iter().any(|(existing, _, _)| existing == &token) {
+        return;
+    }
+    candidates.push((token, source, path));
+}
+
+fn add_token_file_candidate(
+    candidates: &mut Vec<(String, String, Option<PathBuf>)>,
+    path: PathBuf,
+) {
+    if let Ok(contents) = std::fs::read_to_string(&path) {
+        let source = format!("token file {}", path.display());
+        add_token_candidate(candidates, contents, source, Some(path));
+    }
+}
+
 impl RegistryState {
     pub fn new(app: &AppHandle) -> Self {
         let port = env::var("RAPHAEL_REGISTRY_PORT")
@@ -133,28 +156,130 @@ impl RegistryState {
         }
     }
 
-    fn read_token(&self) -> Result<String, String> {
+    fn token_candidates(&self) -> Vec<(String, String, Option<PathBuf>)> {
+        let mut candidates = Vec::new();
+
+        // Do not send tokens discovered from local Raphael installations to an
+        // explicitly configured remote Registry.
+        if self.inner.remote_configured {
+            if let Ok(value) = env::var("RAPHAEL_REGISTRY_AUTH_TOKEN") {
+                add_token_candidate(&mut candidates, value, "RAPHAEL_REGISTRY_AUTH_TOKEN".into(), None);
+            }
+            add_token_file_candidate(&mut candidates, self.inner.token_path.clone());
+            return candidates;
+        }
+
+        // For a local Registry, the persisted token file is authoritative. The
+        // environment may contain a stale token inherited from an old launch.
+        add_token_file_candidate(&mut candidates, self.inner.token_path.clone());
         if let Ok(value) = env::var("RAPHAEL_REGISTRY_AUTH_TOKEN") {
-            let value = value.trim().to_string();
-            if !value.is_empty() {
-                return Ok(value);
+            add_token_candidate(&mut candidates, value, "RAPHAEL_REGISTRY_AUTH_TOKEN".into(), None);
+        }
+
+        // Older Registry builds used Roaming AppData, while current Raphael
+        // clients use Local AppData. Probe both known local locations so the
+        // correct token can be recovered without deleting model data.
+        #[cfg(windows)]
+        for variable in ["LOCALAPPDATA", "APPDATA"] {
+            if let Some(root) = env::var_os(variable) {
+                let data_dir = PathBuf::from(root)
+                    .join("Raphael")
+                    .join("ModelRegistry")
+                    .join("data");
+                add_token_file_candidate(&mut candidates, data_dir.join("registry.token"));
+
+                // The active Registry writes its token file path to registry.lock.
+                if let Ok(contents) = std::fs::read_to_string(data_dir.join("registry.lock")) {
+                    if let Ok(info) = serde_json::from_str::<serde_json::Value>(&contents) {
+                        if let Some(path) = info.get("token_file").and_then(|value| value.as_str()) {
+                            add_token_file_candidate(&mut candidates, PathBuf::from(path));
+                        }
+                    }
+                }
             }
         }
 
-        let value = std::fs::read_to_string(&self.inner.token_path)
-            .map_err(|error| format!(
-                "failed to read Raphael Model Registry token from {}: {error}",
+        candidates
+    }
+
+    fn read_token(&self) -> Result<String, String> {
+        self.token_candidates()
+            .into_iter()
+            .next()
+            .map(|(token, _, _)| token)
+            .ok_or_else(|| format!(
+                "could not read a non-empty Raphael Model Registry token from {} or its configured environment variable",
                 self.inner.token_path.display()
-            ))?
-            .trim()
-            .to_string();
-        if value.is_empty() {
+            ))
+    }
+
+    async fn authorized_token(&self) -> Result<String, String> {
+        let candidates = self.token_candidates();
+        if candidates.is_empty() {
             return Err(format!(
-                "Raphael Model Registry token is empty: {}",
+                "No Registry token was found. Checked {} and RAPHAEL_REGISTRY_AUTH_TOKEN.",
                 self.inner.token_path.display()
             ));
         }
-        Ok(value)
+
+        let status_url = format!("{}/api/v1/status", self.inner.base_url);
+        let mut checked_sources = Vec::new();
+        let mut transport_error = None;
+
+        for (token, source, _) in &candidates {
+            let response = self.inner.http
+                .get(&status_url)
+                .bearer_auth(token.trim())
+                .header("x-raphael-actor", "story-generator")
+                .send()
+                .await;
+
+            match response {
+                Ok(response)
+                    if response.status() == reqwest::StatusCode::UNAUTHORIZED
+                        || response.status() == reqwest::StatusCode::FORBIDDEN =>
+                {
+                    checked_sources.push(source.clone());
+                }
+                Ok(_response) => {
+                    // Align the current local token file with whichever credential
+                    // the already-running Registry actually accepts.
+                    if !self.inner.remote_configured {
+                        let current = std::fs::read_to_string(&self.inner.token_path)
+                            .unwrap_or_default();
+                        if current.trim() != token {
+                            if let Some(parent) = self.inner.token_path.parent() {
+                                let _ = std::fs::create_dir_all(parent);
+                            }
+                            let _ = std::fs::write(
+                                &self.inner.token_path,
+                                format!("{token}\n"),
+                            );
+                        }
+                    }
+                    return Ok(token.clone());
+                }
+                Err(error) => {
+                    transport_error = Some(error.to_string());
+                    checked_sources.push(source.clone());
+                }
+            }
+        }
+
+        if let Some(error) = transport_error {
+            return Err(format!(
+                "Could not verify Registry authentication at {}. Checked token sources: {}. Last connection error: {}",
+                self.inner.base_url,
+                checked_sources.join(", "),
+                error
+            ));
+        }
+
+        Err(format!(
+            "Registry at {} is responding but rejected every available bearer token. Checked: {}. The Registry and Raphael still have different tokens; close Raphael Model Manager and other Registry clients, restart the Registry, then reopen Story Generator. No token values were logged.",
+            self.inner.base_url,
+            checked_sources.join(", ")
+        ))
     }
 
     async fn health(&self) -> bool {
