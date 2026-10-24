@@ -260,10 +260,24 @@ impl RegistryState {
         self.status().await
     }
 
+    fn configure_spawned_registry(&self, command: &mut std::process::Command) {
+        // Keep the server's token/database directory aligned with the token
+        // used by this client. Without this, the Registry's Windows default
+        // may resolve to a different AppData directory and every API request
+        // can fail with HTTP 401 even when both processes are otherwise healthy.
+        if let Some(data_dir) = self.inner.token_path.parent() {
+            command.env("RAPHAEL_REGISTRY_DATA_DIR", data_dir);
+        }
+        if let Ok(token) = self.read_token() {
+            command.env("RAPHAEL_REGISTRY_AUTH_TOKEN", token);
+        }
+    }
+
     async fn spawn_registry(&self) -> Result<(), String> {
         if let Some(executable) = &self.inner.executable {
             let mut command = std::process::Command::new(executable);
             command.arg("server");
+            self.configure_spawned_registry(&mut command);
             spawn_hidden(command)
                 .map_err(|error| format!("failed to start {}: {error}", executable.display()))?;
             return Ok(());
@@ -281,6 +295,7 @@ impl RegistryState {
                 "--",
                 "server",
             ]);
+            self.configure_spawned_registry(&mut command);
             spawn_hidden(command)
                 .map_err(|error| format!("failed to start Registry from Cargo: {error}"))?;
             return Ok(());
