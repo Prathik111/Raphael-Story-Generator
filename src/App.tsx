@@ -855,6 +855,11 @@ function SettingsOverlay({ settings, catalog, registryStatus, catalogError, llmA
   const [ollamaDetectionResult, setOllamaDetectionResult] = useState<string | null>(null);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [styleLoraSearch, setStyleLoraSearch] = useState('');
+  const visibleStyleLoras = catalog.loras.filter(model =>
+    [model.name, model.base_model || '', model.creator || '']
+      .some(value => value.toLowerCase().includes(styleLoraSearch.trim().toLowerCase()))
+  );
 
   const toggleDefaultStyleLora = (id: string) => {
     const selected = draft.default_style_lora_ids || [];
@@ -944,12 +949,15 @@ function SettingsOverlay({ settings, catalog, registryStatus, catalogError, llmA
         <button type="button" className="mini-btn" onClick={() => setDraft({ ...draft, default_style_lora_ids: [] })} disabled={!draft.default_style_lora_ids?.length}>CLEAR SELECTION</button>
       </div>
       <p className="settings-hint settings-lora-help">These LoRAs are locked into every new story and applied across its scenes. Raphael will still search the Registry for compatible character-identity LoRAs that match characters in each scene, and add those automatically. A manually selected LoRA will not be added twice. Choose a compatible checkpoint in VISUAL MODELS before creating the story.</p>
+      <label className="settings-lora-search">FILTER AVAILABLE LORAS<input type="search" value={styleLoraSearch} onChange={e => setStyleLoraSearch(e.target.value)} placeholder="Search by LoRA name, base model, or creator"/></label>
       {registryStatus.status !== 'on'
         ? <div className="model-selection-empty">{catalogError || registryStatus.detail || 'Connect the Model Registry to select LoRAs.'}</div>
         : catalog.loras.length === 0
           ? <div className="model-selection-empty">No LoRAs are registered in the Model Registry.</div>
-          : <div className="settings-lora-grid">
-              {catalog.loras.map(model => (
+          : visibleStyleLoras.length === 0
+            ? <div className="model-selection-empty">No LoRAs match “{styleLoraSearch}”.</div>
+            : <div className="settings-lora-grid">
+              {visibleStyleLoras.map(model => (
                 <RegistryModelChoiceCard
                   key={model.id}
                   model={model}
